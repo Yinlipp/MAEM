@@ -1,0 +1,10 @@
+type = 'MviewMpersonDataVisualization'
+data_root = ''
+output_dir = 'output_visulization_sportscenter'
+meta_path = 'xrmocap_meta_testset'
+pred_kps3d_paths = 
+bbox_thr = None
+vis_percep2d = None
+kps2d_convention = None
+vis_gt_kps3d = None
+gt_kps3d_convention = None

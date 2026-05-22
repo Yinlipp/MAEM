@@ -1,0 +1,51 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and results
+*.log
+*.pkl
+*.npz
+
+# IDE
+.vscode/
+.idea/
+.serena/
+
+# Images / media
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+
+# Allow figs/
+!figs/
+!figs/**
+
+# Model weights and checkpoints
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+# sam-3d-body: exclude data/output, keep source code
+sam-3d-body/output/
+sam-3d-body/checkpoints/
+sam-3d-body/data/
+sam-3d-body/ace_*/
+sam-3d-body/sam-3d-body-vith/
+
+# xrmocap: exclude data/output, keep source code
+xrmocap/xrmocap_data/
+xrmocap/output/
+xrmocap/weight/
+xrmocap/logs/
+xrmocap/opt/
+xrmocap/pytorch3d/
+xrmocap/mmdetection/
+xrmocap/*.egg-info/
+xrmocap/.claude/
+xrmocap/resources/

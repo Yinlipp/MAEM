@@ -1,0 +1,10 @@
+filterpy
+numpy<1.24.0
+# # opencv-python for GL equipped env
+# opencv-python
+# # opencv-python-headless for headless env
+# opencv-python-headless
+pre-commit
+prettytable
+scipy
+tqdm

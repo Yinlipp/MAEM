@@ -1,0 +1,77 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: build
+
+on:
+  push:
+    branches:
+     - main
+    paths-ignore:
+      - 'README.md'
+      - 'README_CN.md'
+      - 'docs/**'
+
+  pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'README_CN.md'
+      - 'docs/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_cuda114:
+    runs-on: ubuntu-20.04
+    defaults:
+      run:
+        shell: bash -l {0}
+    container:
+      image: openxrlab/xrmocap_runtime:ubuntu1804_x64_cuda116_py38_torch1121_mmcv161
+      env:
+        GITHUB_ACTIONS: true
+    steps:
+      - uses: actions/checkout@v2
+      - name: Show conda env
+        run: |
+          source /opt/miniconda/etc/profile.d/conda.sh && conda deactivate
+          conda info -e
+          conda activate openxrlab
+          conda list | grep torch
+          conda list | grep mmcv
+      - name: Prepare test data
+        run: |
+          pip install gdown
+          sh scripts/download_test_data.sh
+      - name: Prepare weight
+        run: |
+          sh scripts/download_weight.sh
+      - name: Build and install
+        run: |
+          rm -rf xrmocap.egg-info
+          source /opt/miniconda/etc/profile.d/conda.sh && conda activate openxrlab
+          pip install xrprimer
+          pip install .
+      - name: Install pytest plugin
+        run: |
+          source /opt/miniconda/etc/profile.d/conda.sh && conda activate openxrlab
+          pip install pytest-github-actions-annotate-failures
+      - name: Run unittests
+        run: |
+          source /opt/miniconda/etc/profile.d/conda.sh && conda activate openxrlab
+          coverage run --source xrmocap -m pytest tests/
+      - name: Generate coverage report
+        run: |
+          source /opt/miniconda/etc/profile.d/conda.sh && conda activate openxrlab
+          coverage xml
+          coverage report -m
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          env_vars: OS,PYTHON
+          name: codecov-umbrella
+          fail_ci_if_error: false

@@ -1,0 +1,333 @@
+# Getting started
+
+- [Installation](#installation)
+- [Data Preparation](#data-preparation)
+- [Body Model Preparation (Optional)](#body-model-preparation-optional)
+- [Inference](#inference)
+- [Evaluation](#evaluation)
+- [Training](#training)
+- [More tutorials](#more-tutorials)
+
+## Installation
+
+Please refer to [installation.md](./installation.md) for installation.
+
+## Data Preparation
+
+Please refer to [data\_preparation.md](./dataset_preparation.md) for data preparation.
+
+## Body Model Preparation (Optional)
+
+If you want to obtain keypoints3d, the body model is not necessary.
+If you want to infer SMPL as well, you can prepare the body model as follows.
+
+- SMPL v1.0.0 is used in our experiments. Please register to get access to the downloads section.
+  - Download male and female models from [SMPL](https://smpl.is.tue.mpg.de/) and neutral model from [SMPLify](https://smplify.is.tue.mpg.de/).
+  - All body models have to be renamed in `SMPL_{GENDER}.pkl` format. <br/>
+    For example, `mv basicModel_neutral_lbs_10_207_0_v1.0.0.pkl SMPL_NEUTRAL.pkl`
+- Download `smpl_mean_params.npz` from [here](https://openmmlab-share.oss-cn-hangzhou.aliyuncs.com/mmhuman3d/models/smpl_mean_params.npz).
+- [gmm_08.zip](https://github.com/vchoutas/smplify-x/files/3295771/gmm_08.zip) from smplify-x repo.
+- [gmm_08.pkl](https://drive.google.com/file/d/1mpRLqK0kdvnbyRsUB-hedeTbm_A6aNGS/view?usp=sharing) from openxrlab backup.
+
+Download the above resources and arrange them in the following file structure:
+
+```text
+xrmocap
+├── xrmocap
+├── docs
+├── tests
+├── tools
+├── configs
+└── xrmocap_data
+    └── body_models
+        ├── gmm_08.pkl
+        ├── smpl_mean_params.npz
+        └── smpl
+            ├── SMPL_FEMALE.pkl
+            ├── SMPL_MALE.pkl
+            └── SMPL_NEUTRAL.pkl
+```
+
+## Inference
+
+We provide a demo script to estimate SMPL parameters for single-person or multi-person from multi-view synchronized input images or videos. With this demo script, you only need to choose a method, we currently support two types of methods, namely, optimization-based approaches and end-to-end learning algorithms, specify a few arguments, and then you can get the estimated results.
+
+We assume that the cameras have been calibrated. If you want to know more about camera calibration, refer to [XRPrimer](https://github.com/openxrlab/xrprimer/blob/main/docs/en/tools/calibrate_multiple_cameras.md) for more details.
+
+
+### Perception Model
+
+Prepare perception models, including detection, 2d pose estimation, tracking and CamStyle models.
+
+```
+sh scripts/download_weight.sh
+```
+You could find perception models in `weight` file.
+
+### Single Person
+
+Currently, we only provide optimization-based method for single person estimation.
+
+1. Download body model. Please refer to [Body Model Preparation](#body-model-preparation-optional)
+2. Download an example raw .smc file from HuMMan dataset [here](https://drive.google.com/file/d/1eVg27ghMCxh8u0GtXcKuiUbQNXiSjMrT/view?usp=sharing).
+3. Place the .smc file in `xrmocap_data/humman/`.
+4. Run [process_smc](./tools/process_smc.md) tool.
+
+```bash
+python tools/process_smc.py \
+	--estimator_config configs/humman_mocap/mview_sperson_smpl_estimator.py \
+	--smc_path xrmocap_data/humman/p000455_a000986.smc \
+	--output_dir xrmocap_data/humman/p000455_a000986_output \
+	--visualize
+```
+
+
+### Multiple People
+
+A small test dataset for quick demo can be downloaded [here](https://drive.google.com/file/d/1vTnmF8QKbp9SQKyEPK11r0DsU11P7PA1/view?usp=sharing). It contains 50 frames from the Shelf sequence, with 5 camera views calibrated and synchronized.
+
+#### Optimization-based methods
+
+For optimization-based approaches, it utilizes the association between 2D keypoints and generates 3D keypoints by triangulation or other methods. Taking [MVPose](../../configs/mvpose/) as an example, it can be run as
+
+1. Download data and body model
+
+- download data
+
+```bash
+mkdir xrmocap_data
+cd xrmocap_data
+gdown https://docs.google.com/uc?id=1vTnmF8QKbp9SQKyEPK11r0DsU11P7PA1
+unzip -q Shelf_50.zip && rm Shelf_50.zip && cd ..
+```
+- download body model
+
+In this section, the `smplify` in the config file is not None, and you will get SMPL model. Please download the body model and refer to [Body Model Preparation](#body-model-preparation-optional) for details.
+
+2. Run demo
+
+```python
+python tools/mview_mperson_topdown_estimator.py \
+      --estimator_config 'configs/mvpose_tracking/mview_mperson_topdown_estimator.py' \
+      --image_and_camera_param 'xrmocap_data/Shelf_50/image_and_camera_param.txt' \
+      --start_frame 300 \
+      --end_frame 350 \
+      --output_dir 'output/estimation' \
+      --enable_log_file
+```
+If all the configuration is OK, you could see the results in `output_dir`.
+
+#### Learning-based methods
+
+For learning-based methods, it resorts to an end-to-end learning scheme so as to require training before inference.
+Taking Multi-view Pose Transformer ([MvP](../../configs/mvp/)) as an example, we can download pretrained MvP model and run it on Shelf_50 as:
+
+1. Install `Deformable` package by running the script:
+```
+sh scripts/download_install_deformable.sh
+```
+
+2. Download data and pretrained model
+
+```bash
+# download data
+mkdir -p xrmocap_data
+cd xrmocap_data
+gdown https://docs.google.com/uc?id=1vTnmF8QKbp9SQKyEPK11r0DsU11P7PA1
+unzip -q Shelf_50.zip && rm Shelf_50.zip && cd ..
+
+# download pretrained model
+mkdir -p weight/mvp
+cd weight/mvp
+gdown https://docs.google.com/uc?id=1gnrOVwvjvtisr9kYJfCFaoDd_XK6Pdsw
+cd ../..
+```
+
+3. Run demo with Shelf_50
+
+
+```bash
+# Evaluation
+sh ./scripts/eval_mvp.sh 1 configs/mvp/shelf_config/mvp_shelf_50.py weight/mvp/xrmocap_mvp_shelf-22d1b5ed_20220831.pth
+```
+If all the configuration is OK, you could see the evaluation result in the terminal.
+
+```python
+# Estimation: Visualization of predicted keypoints3d and SMPL
+python tools/mview_mperson_end2end_estimator.py \
+    --output_dir ./output/estimation \
+    --model_dir weight/mvp/xrmocap_mvp_shelf-22d1b5ed_20220831.pth \
+    --estimator_config configs/modules/core/estimation/mview_mperson_end2end_estimator.py \
+    --image_and_camera_param ./xrmocap_data/Shelf_50/image_and_camera_param.txt \
+    --start_frame 300 \
+    --end_frame 350  \
+    --enable_log_file
+```
+If all the configuration is OK, you could see the estimation results in `output_dir`.
+
+For detailed tutorials about dataset preparation, model weights and checkpoints download for learning-based methods, please refer to the [evaluation tutorial](./tools/eval_model.md) and [estimator tutorial](./estimation/mview_mperson_end2end_estimator.md).
+
+
+## Evaluation
+
+### Perception Model
+
+Prepare perception models, including detection, 2d pose estimation, tracking and CamStyle models.
+
+```
+sh scripts/download_weight.sh
+```
+
+### Evaluate with a single GPU / multiple GPUs
+
+#### Optimization-based methods
+
+1. Download data and body model
+
+- download Shelf dataset and meta-data
+
+```bash
+# download Shelf dataset (16G)
+mkdir xrmocap_data
+wget https://www.campar.in.tum.de/public_datasets/2014_cvpr_belagiannis/Shelf.tar.bz2 -P xrmocap_data
+cd xrmocap_data/ && tar -xf Shelf.tar.bz2 && rm Shelf.tar.bz2 && cd ..
+
+# download meta-data
+mkdir -p xrmocap_data/Shelf
+cd xrmocap_data/Shelf
+gdown https://docs.google.com/uc?id=1X_S5ixym3yZa7GgFHcjwk3W7zV6LfeUo
+unzip xrmocap_meta_testset_fasterrcnn.zip && rm xrmocap_meta_testset_fasterrcnn.zip && cd ../..
+```
+- download body model
+
+In this section, the `smplify` in config file is not None, and you will get SMPL model. Please download the body model and refer to [Body Model Preparation](#body-model-preparation-optional) for details.
+
+
+2. Run demo
+
+- Evaluate on the Shelf dataset and run the tool without tracking.
+
+```bash
+python tools/mview_mperson_evaluation.py \
+      --enable_log_file \
+      --evaluation_config configs/mvpose/shelf_config/eval_keypoints3d.py
+```
+
+- Evaluate on the Shelf dataset and run the tool with tracking.
+
+```bash
+python tools/mview_mperson_evaluation.py \
+      --enable_log_file \
+      --evaluation_config configs/mvpose_tracking/shelf_config/eval_keypoints3d.py
+```
+
+More details about dataset preparation and evaluation can be found at [MVPose evaluation](../../configs/mvpose/README.md) or [MVPose tracking evaluation](../../configs/mvpose_tracking/README.md).
+
+#### Learning-based methods
+
+1. Download and install the `Deformable` package (Skip if you have done this step before)
+
+Run the script:
+
+```bash
+sh scripts/download_install_deformable.sh
+```
+
+2. Download dataset and pretrained model, taking Shelf dataset as an example:
+
+```bash
+# download Shelf dataset (16G)
+mkdir -p xrmocap_data
+wget https://www.campar.in.tum.de/public_datasets/2014_cvpr_belagiannis/Shelf.tar.bz2 -P xrmocap_data
+cd xrmocap_data/ && tar -xf Shelf.tar.bz2 && rm Shelf.tar.bz2 && cd ..
+
+# download meta data
+mkdir -p xrmocap_data
+cd xrmocap_data
+gdown https://docs.google.com/uc?id=1lxulqqkVqcIFwHym6VrvDNF4omdoLHkg
+unzip xrmocap_meta_testset.zip && rm xrmocap_meta_testset.zip && mv xrmocap_meta_testset ./Shelf && cd ..
+
+# download pretrained model
+mkdir -p weight/mvp
+cd weight/mvp
+gdown https://docs.google.com/uc?id=1gnrOVwvjvtisr9kYJfCFaoDd_XK6Pdsw
+cd ../..
+```
+
+3. Run the evaluation:
+
+```bash
+sh ./scripts/eval_mvp.sh 8 configs/mvp/shelf_config/mvp_shelf.py weight/mvp/xrmocap_mvp_shelf-22d1b5ed_20220831.pth
+```
+
+### Evaluate with slurm
+
+If you can run XRMoCap on a cluster managed with [slurm](https://slurm.schedmd.com/), you can use the script `scripts/slurm_eval_mvp.sh`.
+
+
+```bash
+sh ./scripts/slurm_eval_mvp.sh ${PARTITION} 8 configs/mvp/shelf_config/mvp_shelf.py weight/mvp/xrmocap_mvp_shelf-22d1b5ed_20220831.pth
+```
+
+For learning-based methods, more details about dataset preparation, model weights and checkpoints download and evaluation can be found at [evaluation tutorial](./tools/eval_model.md).
+
+
+## Training
+
+Training is only applicable to learning-based methods.
+
+### Training with a single / multiple GPUs
+
+To train the learning-based model, such as a MvP model, to prepare the datasets and pre-trained weights:
+
+1. Download and install the `Deformable` package (Skip if you have done this step before)
+
+Run the script:
+```
+sh scripts/download_install_deformable.sh
+```
+2. Download dataset and pretrained models, taking Shelf dataset as an example:
+
+```bash
+# download Shelf dataset (16G)
+mkdir -p xrmocap_data
+wget https://www.campar.in.tum.de/public_datasets/2014_cvpr_belagiannis/Shelf.tar.bz2 -P xrmocap_data
+cd xrmocap_data/ && tar -xf Shelf.tar.bz2 && rm Shelf.tar.bz2 && cd ..
+
+# download meta data
+mkdir -p xrmocap_data
+cd xrmocap_data
+gdown https://docs.google.com/uc?id=1XK5cFaTfUyGydTwN8NGZLwDSuud0aXZu
+unzip xrmocap_meta_trainset_pesudo_gt.zip && rm xrmocap_meta_trainset_pesudo_gt.zip && mv xrmocap_meta_trainset_pesudo_gt ./Shelf && cd ..
+
+# download pretrained 5-view panoptic model to finetune with Shelf datasest
+mkdir -p weight/mvp
+cd weight/mvp
+gdown https://docs.google.com/uc?id=1Z4JhEKSxd9MMimPWR6nmwsrzfNgqYAhx
+cd ../..
+```
+
+3. Run the training:
+
+```bash
+sh ./scripts/train_mvp.sh 8 configs/mvp/campus_config/mvp_campus.py
+```
+
+### Training with Slurm
+
+If you can run XRMoCap on a cluster managed with [slurm](https://slurm.schedmd.com/), you can use the script `scripts/slurm_train_mvp.sh`.
+
+
+```shell
+sh ./scripts/slurm_train_mvp.sh ${PARTITION} 8 configs/mvp/shelf_config/mvp_shelf.py
+```
+
+For learning-based methods, more details about dataset preparation, model weights and checkpoints download and training can be found at [training tutorial](./tools/train_model.md)
+
+
+## More Tutorials
+
+- [Introduction](./tutorials/introduction.md)
+- [Config](./tutorials/config.md)
+- [New dataset](./tutorials/new_dataset.md)
+- [New module](./tutorials/new_module.md)
