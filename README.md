@@ -121,8 +121,6 @@ python triangulation_evaluation.py \
     --reproj_threshold    20.0
 ```
 
-`projection_visualization.py` is a standalone debugging tool for visually overlaying projected 2D keypoints on images (all paths hardcoded at the top of its `main()` — edit them directly if you need it); it is not part of the pipeline and does not accept CLI arguments.
-
 **Ground truth file format (`keypoints3d_GT.npz`):**
 
 | Key | Shape | Description |
