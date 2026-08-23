@@ -1,7 +1,7 @@
 # MAEM: Mesh-Aware Epipolar Matching forMulti-View Multi-Person 3D Pose Estimation in Basketball
 
 ## Overview
-MAEM (Mesh-Aware Epipolar Matching) is a training-free multi-view multi-person 3D pose estimation framework explicitly designed for team basketball scenarios. MAEM achieves cross-view association purely through geometric constraints, requiring zero target-domain network training. MAEM was evaluated on two public multi-view datasets: 
+MAEM (Mesh-Aware Epipolar Matching) is a retraining-free multi-view multi-person 3D pose estimation framework explicitly designed for team basketball scenarios. MAEM achieves cross-view association purely through geometric constraints, requiring zero target-domain network retraining. MAEM was evaluated on two public multi-view datasets: 
 - [SportCenter Multi-View Human Pose Estimation Dataset](https://www.epfl.ch/labs/cvlab/data/sportcenter-dataset/)
 - [Human-M3 Dataset](https://github.com/soullessrobot/Human-M3-Dataset)
 
