@@ -264,9 +264,13 @@ def main():
 
         results_json = {
             'summary': {
+                'total_frames': len(all_frame_data),
+                'evaluated_frames': len(all_frame_summaries),
+                'ransac_reproj_threshold': args.reproj_threshold,
                 'total_gt': total_gt_count,
                 'total_matched': total_matched_count,
                 'recall': recall,
+                'total_poses': len(all_mpjpe),
                 'mean_mpjpe': mean_mpjpe,
                 'median_mpjpe': median_mpjpe,
                 'mean_pa_mpjpe': mean_pa_mpjpe,
