@@ -3,19 +3,13 @@
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-
 from .camera_utils import get_transform_matrix
 from .epipolar_geometry import compute_fundamental_matrix, compute_epipolar_cost
 from .metrics import compute_pa_mpjpe
 
 
 def _build_person_clusters(pairwise_matches):
-    """Build person clusters using Union-Find algorithm.
-
-    Same-camera conflicts are allowed during construction and resolved
-    later by _resolve_cluster_conflicts.
-    """
+    """Union-Find clustering; same-camera conflicts resolved later, not here."""
     person_to_cluster = {}
     cluster_to_persons = defaultdict(list)
     next_cluster_id = [0]
@@ -45,7 +39,7 @@ def _build_person_clusters(pairwise_matches):
 
 
 def _resolve_cluster_conflicts(person_list, pairwise_matches, logger=None):
-    """Resolve same-camera conflicts by removing the detection with highest mean PA-MPJPE."""
+    """Drop the conflicting detection with highest max-PA-MPJPE cost (Eq. 8), not mean."""
     current = list(person_list)
 
     while True:
@@ -70,7 +64,7 @@ def _resolve_cluster_conflicts(person_list, pairwise_matches, logger=None):
                         costs.append(pa_cost)
                     elif v2 == view and p2_idx == person_idx and (v1, p1_idx) in current_set:
                         costs.append(pa_cost)
-            detection_costs[det] = float(np.mean(costs)) if costs else float('inf')
+            detection_costs[det] = float(max(costs)) if costs else float('inf')
 
         worst = max(detection_costs, key=lambda d: detection_costs[d])
         if logger:
@@ -198,18 +192,9 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
                              epi_threshold: float = 8.0,
                              repr_threshold: float = 30.0,
                              logger=None) -> Tuple[List[Dict], float]:
-    """Match person poses across views using Hungarian algorithm + Union-Find clustering.
+    """Hungarian matching + Union-Find clustering across views.
 
-    matching_mode:
-        'pa_mpjpe'      — PA-MPJPE distance only
-        'sparse'        — epipolar distance on the 13 sparse keypoints only
-        'epi_gate'      — Stage 1 bbox reprojection gate, then Stage 2 dense-mesh
-                           epipolar gate, ranked by PA-MPJPE
-        'repr_gate'     — Stage 1 (bbox reprojection gate) only
-        'epi_gate_only' — Stage 2 (dense-mesh epipolar gate) only
-
-    Returns:
-        (valid_clusters, gate_time_sec)
+    matching_mode: pa_mpjpe | sparse | epi_gate (repr+epipolar) | repr_gate | epi_gate_only
     """
     from .pose_matching import _filter_poses_by_quality, _compute_pairwise_matches
 

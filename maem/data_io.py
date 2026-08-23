@@ -12,16 +12,7 @@ KEYPOINTS_IDX = [0, 5, 6, 7, 8, 62, 41, 9, 10, 11, 12, 13, 14]
 
 
 def load_prediction_npz(npz_path: str, person_idx: int = 0) -> Dict:
-    """Load one person's prediction from an NPZ file.
-
-    Args:
-        npz_path:   path to <frame>.npz produced by SAM-3D-Body
-        person_idx: index into the 'outputs' object array
-
-    Returns:
-        Dict with keys: keypoints3d, bbox_score, pred_cam_t, bbox,
-                        pred_keypoints_2d, pred_keypoints_2d_verts, pred_vertices
-    """
+    """Load one person's prediction (by index into 'outputs') from a SAM-3D-Body NPZ."""
     data = np.load(npz_path, allow_pickle=True)
     if 'outputs' not in data:
         raise ValueError(f"'outputs' key not found in {npz_path}")
@@ -69,10 +60,7 @@ def load_prediction_npz(npz_path: str, person_idx: int = 0) -> Dict:
 
 
 def find_frame_image(folder: str, frame_num: int) -> Optional[str]:
-    """Find the image file for a given frame number.
-
-    Supports naming conventions: '30048', '030048', 'img_030048', 'img_30048'.
-    """
+    """Find the image for a frame number, trying '30048'/'030048'/'img_030048'/'img_30048'."""
     IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif')
     if not os.path.isdir(folder):
         return None
@@ -91,11 +79,7 @@ def find_frame_image(folder: str, frame_num: int) -> Optional[str]:
 
 def load_view_data(view_name: str, frame_num: int, output_dir: str, scene_dir: str,
                    camera_params_dict: Dict) -> Tuple[str, Optional[List[Dict]]]:
-    """Load all person detections for a single view and frame.
-
-    Returns:
-        (view_name, list_of_pose_dicts) or (view_name, None) if loading fails.
-    """
+    """Load all person detections for one view/frame; (view_name, None) on failure."""
     npz_path = os.path.join(output_dir, view_name, 'npz', f'{frame_num:06d}.npz')
     if not os.path.exists(npz_path):
         npz_path = os.path.join(output_dir, view_name, 'npz', f'{frame_num}.npz')

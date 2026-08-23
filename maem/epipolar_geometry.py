@@ -7,10 +7,7 @@ import numpy as np
 
 def compute_fundamental_matrix(K1: np.ndarray, R1: np.ndarray, t1: np.ndarray,
                                K2: np.ndarray, R2: np.ndarray, t2: np.ndarray) -> np.ndarray:
-    """Compute fundamental matrix F such that x2^T F x1 = 0.
-
-    Camera model: P_cam = R @ P_world + t  (world-to-camera).
-    """
+    """Fundamental matrix F such that x2^T F x1 = 0."""
     R_rel = R2 @ R1.T
     t_rel = t2 - R_rel @ t1
     tx, ty, tz = t_rel.ravel()
@@ -24,17 +21,7 @@ def compute_fundamental_matrix(K1: np.ndarray, R1: np.ndarray, t1: np.ndarray,
 
 def compute_epipolar_cost(verts_2d_1: np.ndarray, verts_2d_2: np.ndarray,
                           F: np.ndarray, epi_threshold: float = 20.0, logger=None) -> float:
-    """Compute normalized mean symmetric epipolar distance in [0, 1].
-
-    Args:
-        verts_2d_1:    (N, 2) points in view 1 (pixel coords)
-        verts_2d_2:    (N, 2) points in view 2 (pixel coords)
-        F:             (3, 3) fundamental matrix (view1 → view2)
-        epi_threshold: pixel threshold for normalization
-
-    Returns:
-        Normalized cost in [0, 1]. Returns 1.0 if inputs are invalid.
-    """
+    """Mean symmetric epipolar distance, normalized to [0, 1]; 1.0 if inputs invalid."""
     if verts_2d_1 is None or verts_2d_2 is None:
         return 1.0
 
@@ -62,15 +49,7 @@ def compute_epipolar_cost(verts_2d_1: np.ndarray, verts_2d_2: np.ndarray,
 
 def triangulate_point_dlt(P1: np.ndarray, P2: np.ndarray,
                           pt1: np.ndarray, pt2: np.ndarray) -> Optional[np.ndarray]:
-    """Triangulate a 3D point from two undistorted 2D observations using DLT.
-
-    Args:
-        P1, P2: (3, 4) projection matrices K @ [R | t]
-        pt1, pt2: (2,) undistorted pixel coordinates
-
-    Returns:
-        (3,) 3D point in world coordinates, or None if degenerate.
-    """
+    """Triangulate a 3D point from two undistorted 2D observations via DLT; None if degenerate."""
     A = np.array([
         pt1[0] * P1[2] - P1[0],
         pt1[1] * P1[2] - P1[1],
@@ -85,16 +64,7 @@ def triangulate_point_dlt(P1: np.ndarray, P2: np.ndarray,
 
 
 def compute_reprojection_error(P: np.ndarray, pt_3d: np.ndarray, pt_2d: np.ndarray) -> float:
-    """Reproject a 3D point and compute pixel distance to the observed 2D point.
-
-    Args:
-        P:     (3, 4) projection matrix K @ [R | t]
-        pt_3d: (3,) 3D point in world coordinates
-        pt_2d: (2,) undistorted observed pixel coordinates
-
-    Returns:
-        Reprojection error in pixels.
-    """
+    """Reprojection error in pixels between pt_3d's projection and observed pt_2d."""
     X_h = np.append(pt_3d, 1.0)
     x_h = P @ X_h
     if abs(x_h[2]) < 1e-10:

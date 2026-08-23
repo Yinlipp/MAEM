@@ -25,16 +25,7 @@ def visualize_matched_clusters(matched_clusters: List[Dict], frame_num: int,
                                scene_dir: str, output_dir: str,
                                view_names: Optional[List[str]] = None,
                                n_views: int = 8, logger=None):
-    """Visualize matched person clusters by drawing bboxes on images.
-
-    Args:
-        matched_clusters: list of cluster dicts from match_poses_across_views
-        frame_num:        frame number to load images for
-        scene_dir:        root directory containing per-view image folders
-        output_dir:       directory to save visualization images
-        view_names:       explicit list of view names; if None, derived from n_views
-        n_views:          fallback number of views when view_names is None
-    """
+    """Draw bboxes for each matched person cluster on that frame's per-view images."""
     os.makedirs(output_dir, exist_ok=True)
 
     if view_names is None:

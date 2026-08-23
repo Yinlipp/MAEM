@@ -5,26 +5,13 @@ import os
 from itertools import combinations
 from typing import Dict, List, Optional
 
-import cv2
 import numpy as np
 
 
-# ============================================================================
-# Camera loading helpers (for triangulation)
-# ============================================================================
+# --- Camera loading helpers ---
 
 def load_projection_matrices(camera_params_dict: Dict, camera_param_dir: str):
-    """Load projection matrices P = K @ [R | t] from JSON files.
-
-    Supports two naming conventions:
-        fisheye_param_{i:02d}.json  (SportCenter)
-        camera_{i}.json             (Human-M3)
-
-    Returns:
-        proj_matrices: dict view_name -> P (3, 4)
-        K_dict:        dict view_name -> K (3, 3)
-        dist_dict:     dict view_name -> dist coefficients (8,)
-    """
+    """Load P = K @ [R | t] per view; tries fisheye_param_{i:02d}.json then camera_{i}.json."""
     proj_matrices, K_dict, dist_dict = {}, {}, {}
 
     for view_name in sorted(camera_params_dict.keys()):
@@ -55,11 +42,7 @@ def load_projection_matrices(camera_params_dict: Dict, camera_param_dir: str):
 
 
 def load_camera_parameters_xrmocap(camera_params_dict: Dict, camera_param_dir: str):
-    """Load camera parameters as a list of FisheyeCameraParameter objects for xrmocap.
-
-    Returns:
-        List[FisheyeCameraParameter] in sorted view order
-    """
+    """Load cameras as a sorted list of FisheyeCameraParameter for xrmocap."""
     from xrprimer.data_structure.camera import FisheyeCameraParameter
 
     camera_params = []
@@ -94,17 +77,11 @@ def load_camera_parameters_xrmocap(camera_params_dict: Dict, camera_param_dir: s
     return camera_params
 
 
-# ============================================================================
-# RANSAC triangulation
-# ============================================================================
+# --- RANSAC triangulation ---
 
 def _dlt_triangulate_point(pts2d: np.ndarray, P_list: List[np.ndarray],
                            weights: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
-    """Confidence-weighted DLT triangulation for one 3D point from N >= 2 views.
-
-    Each view's pair of DLT equations is scaled by sqrt(weight) before the SVD,
-    so higher-confidence views (per-view detection score) pull the solution harder.
-    """
+    """DLT triangulation, each view's equations scaled by sqrt(weight) before SVD."""
     A = []
     for i, ((x, y), P) in enumerate(zip(pts2d, P_list)):
         w = 1.0 if weights is None else max(float(weights[i]), 1e-6) ** 0.5
@@ -130,13 +107,7 @@ def _triangulate_point_ransac(pts2d_all: np.ndarray, P_all: List[np.ndarray],
                               valid_mask: np.ndarray,
                               reproj_threshold: float = 20.0,
                               weights_all: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
-    """Per-keypoint RANSAC triangulation.
-
-    Enumerates all view-pair hypotheses, picks the one with the most inliers,
-    then re-triangulates from all inlier views via confidence-weighted DLT.
-    Inlier consensus search itself is unweighted (purely geometric); only the
-    final triangulation math uses weights_all (per-view detection confidence).
-    """
+    """RANSAC over view-pair hypotheses; consensus is unweighted, final DLT uses weights_all."""
     valid_idx = np.where(valid_mask)[0]
     n_valid = len(valid_idx)
     if n_valid < 2:
@@ -184,19 +155,10 @@ def _triangulate_point_ransac(pts2d_all: np.ndarray, P_all: List[np.ndarray],
 
 def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[str],
                                proj_matrices: Dict[str, np.ndarray],
-                               K_dict: Optional[Dict] = None,
-                               dist_dict: Optional[Dict] = None,
                                reproj_threshold: float = 20.0,
                                n_keypoints: int = 13,
                                logger=None) -> Optional[np.ndarray]:
-    """Triangulate all keypoints for one cluster using per-keypoint RANSAC.
-
-    Each view is weighted by its bbox detection confidence (the only per-detection
-    confidence this pipeline produces) in the final DLT solve.
-
-    Returns:
-        (n_keypoints, 3) array or None
-    """
+    """Per-keypoint RANSAC triangulation for one cluster; pred_keypoints_2d assumed already undistorted."""
     poses_dict = matched_cluster['poses']
     n_views = len(view_names_sorted)
 
@@ -217,18 +179,9 @@ def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[st
                     if not (np.all(kpts[ki, :2] == 0) or not np.all(np.isfinite(kpts[ki, :2])))]
         raw_pts = [kpts[ki, :2] for ki in valid_ki]
 
-        if raw_pts and K_dict is not None and dist_dict is not None:
-            K = K_dict[view_name]
-            dist = dist_dict[view_name]
-            pts_arr = np.array(raw_pts, dtype=np.float32).reshape(-1, 1, 2)
-            undist = cv2.undistortPoints(pts_arr, K, dist, P=K).reshape(-1, 2)
-            for idx, ki in enumerate(valid_ki):
-                pts2d_all[vi, ki] = undist[idx]
-                valid_mask[vi, ki] = True
-        else:
-            for idx, ki in enumerate(valid_ki):
-                pts2d_all[vi, ki] = raw_pts[idx]
-                valid_mask[vi, ki] = True
+        for idx, ki in enumerate(valid_ki):
+            pts2d_all[vi, ki] = raw_pts[idx]
+            valid_mask[vi, ki] = True
 
     if logger:
         valid_views = [v for v in view_names_sorted if v in poses_dict]
@@ -246,19 +199,13 @@ def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[st
     return points3d
 
 
-# ============================================================================
-# xrmocap triangulation
-# ============================================================================
+# --- xrmocap triangulation ---
 
 def triangulate_cluster_xrmocap(matched_cluster: Dict, triangulator,
                                  view_names_sorted: List[str],
                                  n_keypoints: int = 13,
                                  logger=None) -> Optional[np.ndarray]:
-    """Triangulate 3D pose using xrmocap's AniposelibTriangulator.
-
-    Returns:
-        (n_keypoints, 3) array or None
-    """
+    """Triangulate one cluster via xrmocap's AniposelibTriangulator."""
     poses_dict = matched_cluster['poses']
     all_views_points, all_views_mask, valid_view_names = [], [], []
 
@@ -298,22 +245,10 @@ def triangulate_cluster_xrmocap(matched_cluster: Dict, triangulator,
 def fuse_poses(matched_clusters: List[Dict], triangulator,
                view_names_sorted: List[str],
                proj_matrices: Optional[Dict] = None,
-               K_dict: Optional[Dict] = None,
-               dist_dict: Optional[Dict] = None,
                reproj_threshold: float = 20.0,
                n_keypoints: int = 13,
                logger=None):
-    """Triangulate 3D poses for all matched clusters.
-
-    Uses RANSAC when proj_matrices is provided; falls back to AniposelibTriangulator.
-
-    Returns:
-        (fused_poses, confidences) — confidences[i] is the mean bbox_score across the
-        views contributing to fused_poses[i]'s cluster. This is an internal ranking
-        signal for compute_ap_delta, not a per-keypoint confidence — the model does
-        not produce one, so the resulting AP is only meaningful for comparing runs
-        of this pipeline against each other, not against HumanM3-paper numbers.
-    """
+    """Triangulate all clusters (RANSAC if proj_matrices given, else xrmocap); confidences = mean bbox_score per cluster, an internal AP ranking signal only."""
     fused_poses = []
     confidences = []
     for person_idx, cluster in enumerate(matched_clusters):
@@ -323,7 +258,6 @@ def fuse_poses(matched_clusters: List[Dict], triangulator,
         if proj_matrices is not None:
             pose_3d = triangulate_cluster_ransac(
                 cluster, view_names_sorted, proj_matrices,
-                K_dict=K_dict, dist_dict=dist_dict,
                 reproj_threshold=reproj_threshold,
                 n_keypoints=n_keypoints, logger=logger
             )

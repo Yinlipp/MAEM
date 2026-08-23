@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""
-Stage 2 — Cross-View Pose Matching and Clustering
-
-Loads per-view NPZ predictions from Stage 1 (SAM-3D-Body), matches persons
-across views using epipolar geometry, and saves matched clusters for Stage 3.
-
-Output:
-    matched_clusters.pkl   — per-frame person clusters with 2D keypoints
-    matching_results.json  — human-readable summary
-    part1_matching_<ts>.log
-"""
+"""Stage 2 — cross-view pose matching and clustering; outputs matched_clusters.pkl for Stage 3."""
 
 import argparse
 import json
@@ -29,8 +19,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Stage 2: Multi-view pose matching and clustering'
     )
-    # I/O — no defaults on purpose: every run must pass its paths explicitly on
-    # the command line rather than silently falling back to a hard-coded path.
+    # I/O — required, no hard-coded defaults
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Directory containing Stage 1 predictions (per-view NPZ)')
     parser.add_argument('--camera_param_dir', type=str, required=True,
@@ -62,9 +51,7 @@ def main():
                         help='Epipolar distance threshold (pixels)')
     parser.add_argument('--repr_threshold', type=float, default=10.0,
                         help='Reprojection error threshold (pixels)')
-    # Visualization
-    parser.add_argument('--visualize_matches', action='store_true', default=False,
-                        help='Save per-frame match visualization images')
+
 
     args = parser.parse_args()
 

@@ -18,11 +18,12 @@ Please clone the official repository and set up environment configurations follo
     conda activate sam_3d_body
     cd sam-3d-body
 
-    python sam-3d-body/sam_prediction.py \
-    --checkpoints_dir /path/to/checkpoints \
-    --img_root_folder /path/to/images \
-    --output_dir      /path/to/output
-   
+    python sam_prediction.py \
+    --checkpoints_dir     /path/to/checkpoints \
+    --img_root_folder     /path/to/images \
+    --output_dir          /path/to/output \
+    --camera_param_dir    /path/to/camera_params \
+    --camera_param_pattern "fisheye_param_{i:02d}.json"
 
 ```text
 Input:
@@ -43,6 +44,8 @@ Output:
 ```
 **Note:** `pred_keypoints_2d_verts` (2D projections of all 18,439 mesh vertices) is added by modifying SAM-3D-Body source and is required by the epipolar matching stage.
 
+**Note:** `--camera_param_dir`/`--camera_param_pattern` are optional but required to reproduce the paper's pipeline: each view's image is undistorted (`cv2.undistort`) *before* being fed to SAM 3D Body, so `pred_keypoints_2d`/`pred_keypoints_2d_verts`/`bbox` in the output NPZ are already in undistorted pixel space. Stage 2 and Stage 3 assume this and no longer undistort points themselves — if you omit these flags, all downstream stages will silently operate on distorted coordinates.
+
 
 ## Stage 2 &mdash; Cross-view Matching and Clustering
 cd ..
@@ -53,7 +56,7 @@ python epipolar_matching_clustering.py \
     --output_dir           /path/to/stage1_output \
     --camera_param_dir     /path/to/camera_params \
     --scene_dir            /path/to/images \
-    --intermediate_output  /path/to output/intermediate_matched_clusters.pkl \
+    --intermediate_output  /path/to/output/intermediate_matched_clusters.pkl \
     --view_name_pattern    "ace_{i}" \
     --num_views            6 \
     --camera_param_pattern "fisheye_param_{i:02d}.json" \
@@ -70,7 +73,7 @@ python epipolar_matching_clustering.py \
     --output_dir           /path/to/stage1_output \
     --camera_param_dir     /path/to/camera_params \
     --scene_dir            /path/to/images \
-    --intermediate_output  /path/to output/intermediate_matched_clusters.pkl \
+    --intermediate_output  /path/to/output/intermediate_matched_clusters.pkl \
     --view_name_pattern    "camera_{i}" \
     --num_views            4 \
     --camera_param_pattern "camera_{i}.json" \
@@ -111,11 +114,14 @@ This step utilizes [xrMoCap](https://github.com/openxrlab/xrmocap) as an externa
 conda deactivate sam_3d_body
 conda activate xrmocap
 
-python projection_visualization.py \
+python triangulation_evaluation.py \
     --intermediate_input  /path/to/intermediate_matched_clusters.pkl \
     --output_dir          /path/to/output \
-    --gt_file             /path/to/keypoints3d_GT.npz
+    --gt_file             /path/to/keypoints3d_GT.npz \
+    --reproj_threshold    20.0
 ```
+
+`projection_visualization.py` is a standalone debugging tool for visually overlaying projected 2D keypoints on images (all paths hardcoded at the top of its `main()` — edit them directly if you need it); it is not part of the pipeline and does not accept CLI arguments.
 
 **Ground truth file format (`keypoints3d_GT.npz`):**
 
@@ -133,8 +139,10 @@ For more file format information, please refer to [xrmocap official instructions
 
 | File | Description |
 |---|---|
-| `pred_keypoints3d.npz` | Triangulated 3D poses per frame |
-| `triangulation_<timestamp>.log` | Evaluation log with per-frame MPJPE and PA-MPJPE |
+| `predicted_3d_poses_xrmocap.npz` | Triangulated 3D poses, padded `(n_frames, n_persons, n_kpts, 3)` |
+| `predicted_3d_poses_gt_format.npz` | Same triangulated poses, reshaped to match the GT array for direct comparison |
+| `evaluation_results_xrmocap.json` | MPJPE / PA-MPJPE / Recall@δ / AP@δ metrics |
+| `part2_triangulation_<timestamp>.log` | Evaluation log with per-frame MPJPE and PA-MPJPE |
 
 **Metrics report:**
 

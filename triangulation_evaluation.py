@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""
-Stage 3 — RANSAC Triangulation and Evaluation
-
-Loads matched clusters from Stage 2, triangulates 3D poses via per-keypoint
-RANSAC (with xrmocap AniposelibTriangulator as fallback), and evaluates
-against ground-truth keypoints3d_GT.npz.
-
-Output:
-    predicted_3d_poses_xrmocap.npz   — padded (n_frames, n_persons, n_kpts, 3)
-    predicted_3d_poses_gt_format.npz — same shape as GT for direct comparison
-    evaluation_results_xrmocap.json  — MPJPE / PA-MPJPE / AP metrics
-    part2_triangulation_<ts>.log
-"""
+"""Stage 3 — RANSAC triangulation of Stage 2 clusters, evaluated against keypoints3d_GT.npz."""
 
 import argparse
 import json
@@ -50,8 +38,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Stage 3: RANSAC triangulation and evaluation'
     )
-    # No defaults on purpose: every run must pass its paths explicitly on the
-    # command line rather than silently falling back to a hard-coded path.
+    # required, no hard-coded defaults
     parser.add_argument('--intermediate_input', type=str, required=True,
                         help='Path to matched_clusters.pkl from Stage 2')
     parser.add_argument('--output_dir', type=str, required=True,
@@ -94,7 +81,7 @@ def main():
     # Load camera parameters
     logger.info("Loading camera parameters...")
     camera_params_xrmocap = load_camera_parameters_xrmocap(camera_params_dict, camera_param_dir)
-    proj_matrices, K_dict, dist_dict = load_projection_matrices(camera_params_dict, camera_param_dir)
+    proj_matrices, _, _ = load_projection_matrices(camera_params_dict, camera_param_dir)
     view_names_sorted = sorted(camera_params_dict.keys())
     logger.info(f"  {len(camera_params_xrmocap)} cameras: {', '.join(view_names_sorted)}")
     logger.info("")
@@ -130,8 +117,7 @@ def main():
 
         logger.info(f"\n--- Frame {frame_num} ({frame_idx}/{len(all_frame_data)}) ---")
 
-        # Parse GT first so every frame's GT persons count toward the recall/AP
-        # denominator, even frames where triangulation produced zero predictions.
+        # GT parsed first so it counts toward recall/AP even with zero predictions
         if frame_idx >= len(gt_poses):
             logger.info(f"  Warning: frame_idx {frame_idx} out of GT range")
             continue
@@ -158,7 +144,7 @@ def main():
         # Triangulate
         frame_avg_poses, frame_confidences = fuse_poses(
             matched_clusters, triangulator, view_names_sorted,
-            proj_matrices=proj_matrices, K_dict=K_dict, dist_dict=dist_dict,
+            proj_matrices=proj_matrices,
             reproj_threshold=args.reproj_threshold,
             n_keypoints=N_KEYPOINTS, logger=logger,
         )
@@ -184,10 +170,7 @@ def main():
         # Optimal assignment (Hungarian algorithm)
         assignments = _hungarian(cost_matrix)
 
-        # Every prediction contributes one entry to the global AP pool, whether or
-        # not Hungarian gave it a partner — linear_sum_assignment only pairs
-        # min(n_pred, n_gt) of them, so surplus predictions (over-detections) must
-        # still be counted as false positives or AP would silently ignore them.
+        # surplus (unassigned) predictions still count as FP in the AP pool
         assigned_col_of = {p: c for p, c in assignments}
         for pred_idx in range(n_pred):
             conf = frame_confidences[pred_idx] if pred_idx < len(frame_confidences) else 0.0
@@ -243,15 +226,8 @@ def main():
         pa_arr = np.array(all_pa_mpjpe)
         ap_thresholds = [75, 100, 125, 150]
 
-        # recall_at_delta: fraction of GT matched (within the fixed 500mm Hungarian
-        # gate) AND within delta mm — a single fixed operating point, not AP.
         recall_at_delta = {t: float((pa_arr < t).sum()) / total_gt_count
                            if total_gt_count > 0 else 0.0 for t in ap_thresholds}
-        # AP_delta: confidence-ranked precision-recall curve (all-point interpolation)
-        # on top of the Hungarian matches above. Confidence = mean bbox_score across
-        # the views contributing to each triangulated person — the only per-detection
-        # confidence this pipeline produces. Internal metric only, not comparable to
-        # HumanM3-paper AP numbers (different confidence signal, different protocol).
         ap_values = {t: compute_ap_delta(all_predictions_for_ap, t, total_gt_count)
                      for t in ap_thresholds}
 

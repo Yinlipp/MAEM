@@ -14,7 +14,7 @@ def compute_mpjpe(pred: np.ndarray, gt: np.ndarray, mask: Optional[np.ndarray] =
 
 
 def _compute_similarity_transform(S1: np.ndarray, S2: np.ndarray) -> Tuple[float, np.ndarray, np.ndarray]:
-    """Compute a similarity transform (sR, t) that takes S1 closest to S2 (Procrustes)."""
+    """Procrustes: similarity transform (sR, t) taking S1 closest to S2."""
     mu1, mu2 = S1.mean(axis=0), S2.mean(axis=0)
     X1, X2 = S1 - mu1, S2 - mu2
     var1 = np.sum(X1 ** 2)
@@ -48,23 +48,10 @@ def compute_pa_mpjpe(pred: np.ndarray, gt: np.ndarray, mask: Optional[np.ndarray
 
 def compute_ap_delta(entries: List[Tuple[float, float, int, Optional[int]]],
                      delta: float, total_gt: int) -> float:
-    """AP_delta built on Hungarian per-frame matching, not HumanM3's own protocol.
+    """AP_delta via all-point interpolation over confidence-ranked Hungarian matches.
 
-    Ranks all predictions globally by confidence, sweeps the ranking to trace a
-    precision-recall curve, and integrates its area via all-point interpolation.
-
-    A prediction is a true positive iff its MPJPE to its Hungarian-assigned GT is
-    below `delta` mm AND that GT hasn't already been claimed by a higher-confidence
-    prediction. Predictions Hungarian left unassigned (surplus over-detections, when
-    a frame has more predictions than valid GT) are always false positives.
-
-    Args:
-        entries:  list of (confidence, mpjpe_to_assigned_gt, frame_idx, gt_idx_or_None)
-        delta:    MPJPE threshold in mm for a true positive
-        total_gt: total number of valid GT persons across all frames (recall denominator)
-
-    Returns:
-        AP_delta in [0, 1]
+    TP iff MPJPE < delta and the GT isn't already claimed by a higher-confidence
+    prediction; unassigned (surplus) predictions are always FP.
     """
     if total_gt == 0 or not entries:
         return 0.0
@@ -87,8 +74,7 @@ def compute_ap_delta(entries: List[Tuple[float, float, int, Optional[int]]],
     recall = tp_cum / total_gt
     precision = tp_cum / np.maximum(tp_cum + fp_cum, 1e-12)
 
-    # All-point interpolation: envelope precision to be non-increasing as recall
-    # decreases, then integrate over recall breakpoints.
+    # envelope precision non-increasing, then integrate
     mrec = np.concatenate(([0.0], recall, [1.0]))
     mpre = np.concatenate(([0.0], precision, [0.0]))
     for i in range(len(mpre) - 2, -1, -1):

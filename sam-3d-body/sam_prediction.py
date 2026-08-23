@@ -1,9 +1,11 @@
 import cv2
+import json
+import re
 import numpy as np
 import os
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 from tqdm import tqdm
 from notebook.utils import setup_sam_3d_body
 from tools.vis_utils import visualize_sample_together
@@ -11,66 +13,62 @@ import argparse
 
 logger = logging.getLogger(__name__)
 
+
+def load_camera_intrinsics(camera_param_path: str) -> Tuple[np.ndarray, np.ndarray]:
+    """Load intrinsic matrix K and OpenCV distortion coefficients from a camera JSON file."""
+    with open(camera_param_path, 'r') as f:
+        params = json.load(f)
+    K = np.array(params['intrinsic'], dtype=np.float64)[:3, :3]
+    dist = np.array([
+        params.get('k1', 0.0), params.get('k2', 0.0),
+        params.get('p1', 0.0), params.get('p2', 0.0), params.get('k3', 0.0),
+    ], dtype=np.float64)
+    return K, dist
+
+
+def get_view_index(folder_name: str) -> Optional[int]:
+    """Extract the trailing view index from a camera folder name, e.g. 'ace_3' -> 3."""
+    match = re.search(r'(\d+)$', folder_name)
+    return int(match.group(1)) if match else None
+
 def save_outputs(outputs: Any, output_path: str) -> None:
-    """Save model outputs to npz file."""
+    """Save model outputs (list of per-person dicts) to npz file."""
     try:
-        # Convert outputs to numpy arrays if needed
-        def convert_to_numpy(obj):
-            if isinstance(obj, np.ndarray):
-                return obj
-            elif isinstance(obj, list):
-                return np.array(obj)
-            elif isinstance(obj, dict):
-                return {key: convert_to_numpy(value) for key, value in obj.items()}
-            else:
-                return obj
-
-        # Prepare data for npz saving
-        # outputs is a list of dictionaries, one per detected person
-        npz_data = {
-            'outputs': np.array(outputs, dtype=object)
-        }
-
-        # Save to NPZ file
+        npz_data = {'outputs': np.array(outputs, dtype=object)}
         np.savez(output_path, **npz_data)
         logger.info(f"Saved outputs to {output_path}")
     except Exception as e:
         logger.error(f"Failed to save outputs to {output_path}: {e}")
 
 def process_image(img_path: str, img_output_path: str, npz_output_path: str,
-                  estimator, save_visualization: bool = True) -> bool:
-    """
-    Process a single image and save results.
-
-    Returns:
-        bool: True if processing succeeded, False otherwise
-    """
+                  estimator, save_visualization: bool = True,
+                  camera_K: Optional[np.ndarray] = None,
+                  camera_dist: Optional[np.ndarray] = None) -> bool:
+    """Process one image; undistorts first if camera_K/camera_dist given."""
     try:
-        # Load image
         img_bgr = cv2.imread(img_path)
         if img_bgr is None:
             logger.error(f"Failed to load image: {img_path}")
             return False
 
+        if camera_K is not None:
+            img_bgr = cv2.undistort(img_bgr, camera_K, camera_dist)
+
         logger.info(f"Processing {img_path}")
 
-        # Process image
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         outputs = estimator.process_one_image(img_rgb)
 
-        # Handle results
         if len(outputs) == 0:
             logger.warning(f"No person detected in {img_path}")
             if save_visualization:
                 cv2.imwrite(img_output_path, img_bgr)
             return False
 
-        # Visualize and save
         if save_visualization:
             rend_img = visualize_sample_together(img_bgr, outputs, estimator.faces)
             cv2.imwrite(img_output_path, rend_img.astype(np.uint8))
 
-        # Save outputs to npz
         save_outputs(outputs, npz_output_path)
 
         return True
@@ -88,7 +86,6 @@ def get_frame_number(filename: str) -> str:
         return Path(filename).stem
 
 def main():
-    # Set up logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s')
@@ -96,33 +93,25 @@ def main():
 
     parser = argparse.ArgumentParser(description='SAM 3d body inference')
 
-    parser.add_argument('--checkpoints_dir', type=str, default='/home/y_li/workspace7/MAEM/sam-3d-body/checkpoints/',
+    parser.add_argument('--checkpoints_dir', type=str, required=True,
                          help='checkpoints folder path')
-    parser.add_argument('--img_root_folder', type=str, default='/home/y_li/workspace7/humanm3/test/plaza/images',
+    parser.add_argument('--img_root_folder', type=str, required=True,
                         help='the folder path containing subfolders of images from different views')
-    parser.add_argument('--output_dir', default='/home/y_li/workspace7/MAEM/sam-3d-body/output/plaza',
+    parser.add_argument('--output_dir', type=str, required=True,
                          help='output dir')
-    
+    parser.add_argument('--camera_param_dir', type=str, default=None,
+                         help='per-view camera JSON dir; undistorts images before inference if set')
+    parser.add_argument('--camera_param_pattern', type=str, default='fisheye_param_{i:02d}.json',
+                         help='camera JSON filename template, e.g. "camera_{i}.json"; {i} = view index')
+
     args = parser.parse_args()
 
-    # Configuration
     checkpoint_path = os.path.join(args.checkpoints_dir, "model.ckpt")
     mhr_path = os.path.join(args.checkpoints_dir, "assets", "mhr_model.pt")
 
-    # Dataset Humanm3
     imgs_root_folder = args.img_root_folder
-    # imgs_root_folder = '/home/y_li/workspace7/humanm3/test/basketball1/split2/images/'
-
-    # sportscenter 21380
-    imgs_root_folder = '/home/y_li/workspace7/xrmocap/xrmocap_data/xrmocap_sportscenter/scene_0'
-    
     out_folder = args.output_dir
-    out_folder = "/home/y_li/workspace7/sam-3d-body/output/sportscenter_21380/"
-    # out_folder = "/home/y_li/workspace7/sam-3d-body/output/humanm3//basketball1/split2/"
-
-    # Create output folder
     os.makedirs(out_folder, exist_ok=True)
-
 
     try:
         estimator = setup_sam_3d_body(
@@ -136,28 +125,39 @@ def main():
 
     logger.info(f"Processing images from {imgs_root_folder}")
 
-    # Get all folders
     folders = [f for f in os.listdir(imgs_root_folder)
                if os.path.isdir(os.path.join(imgs_root_folder, f))]
 
     total_processed = 0
     total_failed = 0
 
-    # Process each folder
     for folder_name in tqdm(folders, desc="Processing folders"):
         img_folder_path = os.path.join(imgs_root_folder, folder_name)
 
-        # Create output folder for this camera view
         img_output_folder = os.path.join(out_folder, folder_name)
         npz_output_folder = os.path.join(img_output_folder, "npz")
         os.makedirs(img_output_folder, exist_ok=True)
         os.makedirs(npz_output_folder, exist_ok=True)
 
-        # Get all image files
+        # resolve this view's camera intrinsics/distortion, if requested
+        camera_K, camera_dist = None, None
+        if args.camera_param_dir is not None:
+            view_idx = get_view_index(folder_name)
+            if view_idx is None:
+                logger.warning(f"Could not parse a view index from folder '{folder_name}', "
+                               f"skipping undistortion for this view")
+            else:
+                param_path = os.path.join(args.camera_param_dir,
+                                          args.camera_param_pattern.format(i=view_idx))
+                if os.path.exists(param_path):
+                    camera_K, camera_dist = load_camera_intrinsics(param_path)
+                else:
+                    logger.warning(f"Camera params not found for '{folder_name}': {param_path}, "
+                                   f"skipping undistortion for this view")
+
         image_files = [img for img in os.listdir(img_folder_path)
                        if img.lower().endswith(('.jpg', '.png', '.jpeg'))]
 
-        # Process each image
         for img_name in tqdm(image_files, desc=f"  {folder_name}", leave=False):
             img_path = os.path.join(img_folder_path, img_name)
             img_output_path = os.path.join(img_output_folder, img_name)
@@ -165,7 +165,8 @@ def main():
             frame_num = get_frame_number(img_name)
             npz_output_path = os.path.join(npz_output_folder, f'{frame_num}.npz')
 
-            success = process_image(img_path, img_output_path, npz_output_path, estimator)
+            success = process_image(img_path, img_output_path, npz_output_path, estimator,
+                                    camera_K=camera_K, camera_dist=camera_dist)
 
             if success:
                 total_processed += 1
