@@ -1,6 +1,6 @@
-"""Evaluation metrics: MPJPE and PA-MPJPE."""
+"""Evaluation metrics: MPJPE, PA-MPJPE, and AP_delta."""
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 import numpy as np
 
 
@@ -44,3 +44,55 @@ def compute_pa_mpjpe(pred: np.ndarray, gt: np.ndarray, mask: Optional[np.ndarray
     pred_aligned = s * (R @ pred.T).T + t
     distances = np.linalg.norm(pred_aligned - gt, axis=1) * 1000
     return float(np.mean(distances[valid]))
+
+
+def compute_ap_delta(entries: List[Tuple[float, float, int, Optional[int]]],
+                     delta: float, total_gt: int) -> float:
+    """AP_delta built on Hungarian per-frame matching, not HumanM3's own protocol.
+
+    Ranks all predictions globally by confidence, sweeps the ranking to trace a
+    precision-recall curve, and integrates its area via all-point interpolation.
+
+    A prediction is a true positive iff its MPJPE to its Hungarian-assigned GT is
+    below `delta` mm AND that GT hasn't already been claimed by a higher-confidence
+    prediction. Predictions Hungarian left unassigned (surplus over-detections, when
+    a frame has more predictions than valid GT) are always false positives.
+
+    Args:
+        entries:  list of (confidence, mpjpe_to_assigned_gt, frame_idx, gt_idx_or_None)
+        delta:    MPJPE threshold in mm for a true positive
+        total_gt: total number of valid GT persons across all frames (recall denominator)
+
+    Returns:
+        AP_delta in [0, 1]
+    """
+    if total_gt == 0 or not entries:
+        return 0.0
+
+    ranked = sorted(entries, key=lambda e: e[0], reverse=True)
+    claimed = set()
+    tp = np.zeros(len(ranked))
+    fp = np.zeros(len(ranked))
+
+    for i, (conf, mpjpe, frame_idx, gt_idx) in enumerate(ranked):
+        key = (frame_idx, gt_idx)
+        if gt_idx is not None and mpjpe < delta and key not in claimed:
+            tp[i] = 1
+            claimed.add(key)
+        else:
+            fp[i] = 1
+
+    tp_cum = np.cumsum(tp)
+    fp_cum = np.cumsum(fp)
+    recall = tp_cum / total_gt
+    precision = tp_cum / np.maximum(tp_cum + fp_cum, 1e-12)
+
+    # All-point interpolation: envelope precision to be non-increasing as recall
+    # decreases, then integrate over recall breakpoints.
+    mrec = np.concatenate(([0.0], recall, [1.0]))
+    mpre = np.concatenate(([0.0], precision, [0.0]))
+    for i in range(len(mpre) - 2, -1, -1):
+        mpre[i] = max(mpre[i], mpre[i + 1])
+
+    idx = np.where(mrec[1:] != mrec[:-1])[0]
+    return float(np.sum((mrec[idx + 1] - mrec[idx]) * mpre[idx + 1]))

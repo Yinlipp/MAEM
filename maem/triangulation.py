@@ -302,15 +302,20 @@ def fuse_poses(matched_clusters: List[Dict], triangulator,
                dist_dict: Optional[Dict] = None,
                reproj_threshold: float = 20.0,
                n_keypoints: int = 13,
-               logger=None) -> List[np.ndarray]:
+               logger=None):
     """Triangulate 3D poses for all matched clusters.
 
     Uses RANSAC when proj_matrices is provided; falls back to AniposelibTriangulator.
 
     Returns:
-        List of (n_keypoints, 3) arrays
+        (fused_poses, confidences) — confidences[i] is the mean bbox_score across the
+        views contributing to fused_poses[i]'s cluster. This is an internal ranking
+        signal for compute_ap_delta, not a per-keypoint confidence — the model does
+        not produce one, so the resulting AP is only meaningful for comparing runs
+        of this pipeline against each other, not against HumanM3-paper numbers.
     """
     fused_poses = []
+    confidences = []
     for person_idx, cluster in enumerate(matched_clusters):
         if logger:
             logger.info(f"    Processing person {person_idx}")
@@ -330,7 +335,9 @@ def fuse_poses(matched_clusters: List[Dict], triangulator,
 
         if pose_3d is not None:
             fused_poses.append(pose_3d)
+            view_scores = [v.get('scores', 0.0) for v in cluster['poses'].values()]
+            confidences.append(float(np.mean(view_scores)) if view_scores else 0.0)
         elif logger:
             logger.warning(f"      Failed to triangulate person {person_idx}, skipping")
 
-    return fused_poses
+    return fused_poses, confidences

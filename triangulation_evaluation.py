@@ -40,7 +40,7 @@ except ImportError:
         return _munkres.compute(cost_matrix.tolist())
 
 from maem.logging_utils import setup_logger
-from maem.metrics import compute_mpjpe, compute_pa_mpjpe
+from maem.metrics import compute_mpjpe, compute_pa_mpjpe, compute_ap_delta
 from maem.triangulation import (load_projection_matrices,
                                 load_camera_parameters_xrmocap,
                                 fuse_poses)
@@ -115,6 +115,8 @@ def main():
     total_gt_count = total_matched_count = 0
     all_frames_poses = []
     frame_to_idx_mapping = {}
+    # (confidence, mpjpe_to_assigned_gt_or_inf, frame_idx, gt_idx_or_None) per prediction
+    all_predictions_for_ap = []
 
     MATCH_THRESHOLD_MM = 500.0
     INF_COST = 1e9
@@ -154,7 +156,7 @@ def main():
         total_gt_count += len(gt_valid_indices)
 
         # Triangulate
-        frame_avg_poses = fuse_poses(
+        frame_avg_poses, frame_confidences = fuse_poses(
             matched_clusters, triangulator, view_names_sorted,
             proj_matrices=proj_matrices, K_dict=K_dict, dist_dict=dist_dict,
             reproj_threshold=args.reproj_threshold,
@@ -179,8 +181,27 @@ def main():
                     fused_pose, gt_poses_clean[gt_idx], gt_masks_clean[gt_idx]
                 )
 
+        # Optimal assignment (Hungarian algorithm)
+        assignments = _hungarian(cost_matrix)
+
+        # Every prediction contributes one entry to the global AP pool, whether or
+        # not Hungarian gave it a partner — linear_sum_assignment only pairs
+        # min(n_pred, n_gt) of them, so surplus predictions (over-detections) must
+        # still be counted as false positives or AP would silently ignore them.
+        assigned_col_of = {p: c for p, c in assignments}
+        for pred_idx in range(n_pred):
+            conf = frame_confidences[pred_idx] if pred_idx < len(frame_confidences) else 0.0
+            if pred_idx in assigned_col_of:
+                col = assigned_col_of[pred_idx]
+                ap_mpjpe = cost_matrix[pred_idx, col]
+                ap_gt_idx = gt_valid_indices[col]
+            else:
+                ap_mpjpe = float('inf')
+                ap_gt_idx = None
+            all_predictions_for_ap.append((conf, ap_mpjpe, frame_idx, ap_gt_idx))
+
         frame_person_results = []
-        for pred_idx, col in _hungarian(cost_matrix):
+        for pred_idx, col in assignments:
             cost = cost_matrix[pred_idx, col]
             gt_idx = gt_valid_indices[col]
             if cost >= MATCH_THRESHOLD_MM:
@@ -221,15 +242,25 @@ def main():
         recall = total_matched_count / total_gt_count if total_gt_count > 0 else 0.0
         pa_arr = np.array(all_pa_mpjpe)
         ap_thresholds = [75, 100, 125, 150]
-        ap_values = {t: float((pa_arr < t).sum()) / total_gt_count
-                     if total_gt_count > 0 else 0.0 for t in ap_thresholds}
+
+        # recall_at_delta: fraction of GT matched (within the fixed 500mm Hungarian
+        # gate) AND within delta mm — a single fixed operating point, not AP.
+        recall_at_delta = {t: float((pa_arr < t).sum()) / total_gt_count
+                           if total_gt_count > 0 else 0.0 for t in ap_thresholds}
+        # AP_delta: confidence-ranked precision-recall curve (all-point interpolation)
+        # on top of the Hungarian matches above. Confidence = mean bbox_score across
+        # the views contributing to each triangulated person — the only per-detection
+        # confidence this pipeline produces. Internal metric only, not comparable to
+        # HumanM3-paper AP numbers (different confidence signal, different protocol).
+        ap_values = {t: compute_ap_delta(all_predictions_for_ap, t, total_gt_count)
+                     for t in ap_thresholds}
 
         logger.info(f"GT persons:   {total_gt_count}")
         logger.info(f"Matched:      {total_matched_count}  (Recall: {recall*100:.2f}%)")
         logger.info(f"MPJPE:        {mean_mpjpe:.2f}mm mean, {median_mpjpe:.2f}mm median")
         logger.info(f"PA-MPJPE:     {mean_pa_mpjpe:.2f}mm mean, {median_pa_mpjpe:.2f}mm median")
         for t in ap_thresholds:
-            logger.info(f"AP@{t}mm:      {ap_values[t]*100:.2f}%")
+            logger.info(f"Recall@{t}mm: {recall_at_delta[t]*100:.2f}%   AP@{t}mm: {ap_values[t]*100:.2f}%")
 
         results_json = {
             'summary': {
@@ -240,6 +271,7 @@ def main():
                 'median_mpjpe': median_mpjpe,
                 'mean_pa_mpjpe': mean_pa_mpjpe,
                 'median_pa_mpjpe': median_pa_mpjpe,
+                **{f'recall_at_{t}mm': recall_at_delta[t] for t in ap_thresholds},
                 **{f'ap{t}mm': ap_values[t] for t in ap_thresholds},
             },
             'frame_summaries': all_frame_summaries,
