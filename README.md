@@ -41,7 +41,7 @@ Output:
     └── ...
 
 ```
-**Note:** `pred_keypoints_2d_verts` (2D projections of all 6890 SMPL mesh vertices) is added by modifying SAM-3D-Body source and is required by the epipolar matching stage.
+**Note:** `pred_keypoints_2d_verts` (2D projections of all 18,439 mesh vertices) is added by modifying SAM-3D-Body source and is required by the epipolar matching stage.
 
 
 ## Stage 2 &mdash; Cross-view Matching and Clustering

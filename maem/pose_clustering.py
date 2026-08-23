@@ -193,12 +193,8 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
                              min_views: int = 3,
                              max_error_threshold: Optional[float] = None,
                              bbox_score_threshold: float = 0.9,
-                             filter_incomplete_bbox: bool = True,
-                             bbox_area_ratio: float = 0.5,
-                             bbox_border_margin: int = 5,
-                             matching_mode: str = 'hybrid',
+                             matching_mode: str = 'epi_gate',
                              camera_params_dict: Optional[Dict] = None,
-                             mpjpe_weight: float = 0.5,
                              epi_threshold: float = 8.0,
                              repr_threshold: float = 30.0,
                              logger=None) -> Tuple[List[Dict], float]:
@@ -206,9 +202,11 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
 
     matching_mode:
         'pa_mpjpe'      — PA-MPJPE distance only
-        'epipolar_only' — epipolar geometry distance only
-        'hybrid'        — mpjpe_weight * PA-MPJPE + (1-mpjpe_weight) * epipolar
-        'epi_gate'      — reprojection gate → epipolar gate → PA-MPJPE ranking
+        'sparse'        — epipolar distance on the 13 sparse keypoints only
+        'epi_gate'      — Stage 1 bbox reprojection gate, then Stage 2 dense-mesh
+                           epipolar gate, ranked by PA-MPJPE
+        'repr_gate'     — Stage 1 (bbox reprojection gate) only
+        'epi_gate_only' — Stage 2 (dense-mesh epipolar gate) only
 
     Returns:
         (valid_clusters, gate_time_sec)
@@ -220,8 +218,7 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
                     f"bbox_score_threshold={bbox_score_threshold}")
 
     poses_world_dict_all_people = _filter_poses_by_quality(
-        poses_world_dict_all_people, bbox_score_threshold, filter_incomplete_bbox,
-        bbox_area_ratio, bbox_border_margin, logger
+        poses_world_dict_all_people, bbox_score_threshold, logger
     )
 
     view_names = sorted(poses_world_dict_all_people.keys())
@@ -233,7 +230,7 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
     pairwise_matches, gate_time_sec = _compute_pairwise_matches(
         poses_world_dict_all_people, view_names, matching_mode,
         max_error_threshold, camera_params_dict,
-        mpjpe_weight=mpjpe_weight, epi_threshold=epi_threshold,
+        epi_threshold=epi_threshold,
         repr_threshold=repr_threshold, logger=logger
     )
 

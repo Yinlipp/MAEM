@@ -108,16 +108,6 @@ def load_view_data(view_name: str, frame_num: int, output_dir: str, scene_dir: s
             return view_name, None
         num_detections = len(data['outputs'])
 
-        img_path = find_frame_image(os.path.join(scene_dir, view_name), frame_num)
-        image_width = image_height = None
-        if img_path is not None:
-            try:
-                from PIL import Image
-                with Image.open(img_path) as img:
-                    image_width, image_height = img.size
-            except Exception:
-                pass
-
         cam_params = camera_params_dict[view_name]
         R, t, _ = get_transform_matrix(cam_params)
 
@@ -139,8 +129,6 @@ def load_view_data(view_name: str, frame_num: int, output_dir: str, scene_dir: s
                     'bbox': pred_data.get('bbox'),
                     'pred_keypoints_2d': pred_data.get('pred_keypoints_2d'),
                     'pred_keypoints_2d_verts': pred_data.get('pred_keypoints_2d_verts'),
-                    'image_w': image_width,
-                    'image_h': image_height,
                 })
             except Exception as e:
                 print(f"Warning: Failed to process person {person_idx} in {view_name}: {e}")

@@ -29,27 +29,15 @@ def main():
     parser = argparse.ArgumentParser(
         description='Stage 2: Multi-view pose matching and clustering'
     )
-    # I/O
-    parser.add_argument('--output_dir', type=str,
-                    #    default='/home/y_li/workspace7/MAEM/sam-3d-body/output/sportscenter_21380/',
-                    #    default='/work7/y_li/sam-3d-body/output/humanm3/basketball1/split1',
-                    #    default='/work7/y_li/sam-3d-body/output/humanm3/basketball2/',
-                    #    default='/home/y_li/workspace7/sam-3d-body/output/sportscenter_30000/',
+    # I/O — no defaults on purpose: every run must pass its paths explicitly on
+    # the command line rather than silently falling back to a hard-coded path.
+    parser.add_argument('--output_dir', type=str, required=True,
                         help='Directory containing Stage 1 predictions (per-view NPZ)')
-    parser.add_argument('--camera_param_dir', type=str,
-                    #    default='/home/y_li/workspace7/xrmocap/xrmocap_data/xrmocap_sportscenter/xrmocap_meta_sportscenter/scene_0/camera_parameters',
-                    #    default='/home/y_li/workspace7/humanm3/test/basketball1/split1/camera_calibration',
-                    #    default='/home/y_li/workspace7/humanm3/test/basketball2/camera_calibration',
+    parser.add_argument('--camera_param_dir', type=str, required=True,
                         help='Directory containing camera parameter JSON files')
-    parser.add_argument('--scene_dir', type=str,
-                    #    default='/home/y_li/workspace7/xrmocap/xrmocap_data/xrmocap_sportscenter/scene_0',
-                    #    default='/home/y_li/workspace7/humanm3/test/basketball1/split1/images',
-                    #    default='/home/y_li/workspace7/humanm3/test/basketball2/images',
+    parser.add_argument('--scene_dir', type=str, required=True,
                         help='Root folder with per-view image subfolders')
-    parser.add_argument('--intermediate_output', type=str,
-                    #    default='/home/y_li/workspace7/MAEM/sam-3d-body/output/sportscenter_21380/intermediate_matched_clusters.pkl',
-                    #    default='/work7/y_li/sam-3d-body/output/humanm3/basketball1/split1/intermediate_matched_clusters.pkl',
-                    #    default='/work7/y_li/sam-3d-body/output/humanm3/basketball2/intermediate_matched_clusters.pkl',
+    parser.add_argument('--intermediate_output', type=str, required=True,
                         help='Output path for matched_clusters.pkl')
     # View naming
     parser.add_argument('--view_name_pattern', type=str, default='ace_{i}',
@@ -67,11 +55,9 @@ def main():
     parser.add_argument('--bbox_score_threshold', type=float, default=0.9,
                         help='Minimum detection confidence score')
     parser.add_argument('--matching_mode', type=str, default='epi_gate',
-                        choices=['pa_mpjpe', 'epipolar_only', 'hybrid',
-                                 'epi_gate', 'repr_gate', 'epi_gate_only'],
+                        choices=['pa_mpjpe', 'sparse', 'epi_gate',
+                                 'repr_gate', 'epi_gate_only'],
                         help='Cross-view matching mode')
-    parser.add_argument('--mpjpe_weight', type=float, default=0.3,
-                        help='PA-MPJPE weight in hybrid mode')
     parser.add_argument('--epi_threshold', type=float, default=8.0,
                         help='Epipolar distance threshold (pixels)')
     parser.add_argument('--repr_threshold', type=float, default=10.0,
@@ -155,7 +141,6 @@ def main():
             bbox_score_threshold=args.bbox_score_threshold,
             matching_mode=args.matching_mode,
             camera_params_dict=camera_params_dict,
-            mpjpe_weight=args.mpjpe_weight,
             epi_threshold=args.epi_threshold,
             repr_threshold=args.repr_threshold,
             logger=logger,

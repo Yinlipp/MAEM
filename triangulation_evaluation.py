@@ -50,20 +50,13 @@ def main():
     parser = argparse.ArgumentParser(
         description='Stage 3: RANSAC triangulation and evaluation'
     )
-    parser.add_argument('--intermediate_input', type=str,
-                    #    default='/home/y_li/workspace7/MAEM/sam-3d-body/output/sportscenter_30000/intermediate_matched_clusters.pkl',
-                    #    default='/home/y_li/workspace7/sam-3d-body/output/sportscenter_21380/intermediate_matched_clusters.pkl',
-                    #    default='/home/y_li/workspace7/sam-3d-body/output/humanm3/basketball2/intermediate_matched_clusters.pkl',
+    # No defaults on purpose: every run must pass its paths explicitly on the
+    # command line rather than silently falling back to a hard-coded path.
+    parser.add_argument('--intermediate_input', type=str, required=True,
                         help='Path to matched_clusters.pkl from Stage 2')
-    parser.add_argument('--output_dir', type=str,
-                    #    default='/home/y_li/workspace7/MAEM/sam-3d-body/output/sportscenter_21380',
-                    #    default='/home/y_li/workspace7/sam-3d-body/output/sportscenter_30000',
-                    #    default='/home/y_li/workspace7/sam-3d-body/output/humanm3/basketball2/',
+    parser.add_argument('--output_dir', type=str, required=True,
                         help='Output directory for results')
-    parser.add_argument('--gt_file', type=str,
-                    #    default='/home/y_li/workspace7/xrmocap/xrmocap_data/xrmocap_sportscenter/xrmocap_meta_sportscenter/scene_0/keypoints3d_GT.npz',
-                    #    default='/home/y_li/workspace7/xrmocap/xrmocap_data/xrmocap_sportscenter_30000/xrmocap_meta_sportscenter_30000/scene_0/keypoints3d_GT.npz',
-                    #    default='/home/y_li/workspace7/humanm3/test/basketball2/keypoints3d_GT.npz',
+    parser.add_argument('--gt_file', type=str, required=True,
                         help='Ground truth NPZ file (keypoints3d_GT.npz)')
     parser.add_argument('--save_3d_poses', action='store_true', default=True,
                         help='Save triangulated 3D poses to NPZ')
@@ -135,25 +128,8 @@ def main():
 
         logger.info(f"\n--- Frame {frame_num} ({frame_idx}/{len(all_frame_data)}) ---")
 
-        # Triangulate
-        frame_avg_poses = fuse_poses(
-            matched_clusters, triangulator, view_names_sorted,
-            proj_matrices=proj_matrices, K_dict=K_dict, dist_dict=dist_dict,
-            reproj_threshold=args.reproj_threshold,
-            n_keypoints=N_KEYPOINTS, logger=logger,
-        )
-
-        if not frame_avg_poses:
-            logger.info(f"  No valid poses for frame {frame_num}")
-            continue
-
-        logger.info(f"  Triangulated {len(frame_avg_poses)} pose(s)")
-
-        if args.save_3d_poses:
-            all_frames_poses.append(np.array(frame_avg_poses))
-            frame_to_idx_mapping[frame_num] = len(all_frames_poses) - 1
-
-        # GT matching
+        # Parse GT first so every frame's GT persons count toward the recall/AP
+        # denominator, even frames where triangulation produced zero predictions.
         if frame_idx >= len(gt_poses):
             logger.info(f"  Warning: frame_idx {frame_idx} out of GT range")
             continue
@@ -176,6 +152,24 @@ def main():
 
         gt_valid_indices = sorted(gt_poses_clean.keys())
         total_gt_count += len(gt_valid_indices)
+
+        # Triangulate
+        frame_avg_poses = fuse_poses(
+            matched_clusters, triangulator, view_names_sorted,
+            proj_matrices=proj_matrices, K_dict=K_dict, dist_dict=dist_dict,
+            reproj_threshold=args.reproj_threshold,
+            n_keypoints=N_KEYPOINTS, logger=logger,
+        )
+
+        if not frame_avg_poses:
+            logger.info(f"  No valid poses for frame {frame_num}")
+            continue
+
+        logger.info(f"  Triangulated {len(frame_avg_poses)} pose(s)")
+
+        if args.save_3d_poses:
+            all_frames_poses.append(np.array(frame_avg_poses))
+            frame_to_idx_mapping[frame_num] = len(all_frames_poses) - 1
 
         n_pred = len(frame_avg_poses)
         cost_matrix = np.full((n_pred, len(gt_valid_indices)), INF_COST)

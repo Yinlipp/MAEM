@@ -12,30 +12,8 @@ from .epipolar_geometry import (compute_fundamental_matrix, compute_epipolar_cos
 from .metrics import compute_pa_mpjpe
 
 
-def filter_incomplete_bboxes(bboxes, image_width, image_height,
-                             area_ratio=0.5, border_margin=5):
-    """Filter out incomplete bboxes (small AND touching border)."""
-    if not bboxes:
-        return []
-    bbox_coords = [b['bbox'] if isinstance(b, dict) else b for b in bboxes]
-    if not bbox_coords:
-        return []
-    areas = [(x2 - x1) * (y2 - y1) for x1, y1, x2, y2 in bbox_coords]
-    median_area = np.median(areas)
-    kept_indices = []
-    for idx, ((x1, y1, x2, y2), area) in enumerate(zip(bbox_coords, areas)):
-        touches_border = (x1 <= border_margin or y1 <= border_margin or
-                         x2 >= image_width - border_margin or
-                         y2 >= image_height - border_margin)
-        is_small = area < area_ratio * median_area
-        if not (is_small or touches_border):
-            kept_indices.append(idx)
-    return kept_indices
-
-
-def _filter_poses_by_quality(poses_world_dict, bbox_score_threshold, filter_incomplete_bbox,
-                             bbox_area_ratio, bbox_border_margin, logger):
-    """Filter poses by bbox score and completeness."""
+def _filter_poses_by_quality(poses_world_dict, bbox_score_threshold, logger):
+    """Filter poses by bbox score."""
     filtered_poses = {}
     for view_name, pose_list in poses_world_dict.items():
         valid_poses = []
@@ -54,18 +32,6 @@ def _filter_poses_by_quality(poses_world_dict, bbox_score_threshold, filter_inco
                 continue
             valid_poses.append(pose_dict)
 
-        if filter_incomplete_bbox and valid_poses:
-            w = valid_poses[0].get('image_w')
-            h = valid_poses[0].get('image_h')
-            if w is not None and h is not None:
-                kept = filter_incomplete_bboxes(valid_poses, w, h,
-                                               area_ratio=bbox_area_ratio,
-                                               border_margin=bbox_border_margin)
-                if len(kept) < len(valid_poses) and logger:
-                    logger.info(f"    Filtered {len(valid_poses) - len(kept)} "
-                                f"incomplete bboxes in {view_name}")
-                valid_poses = [valid_poses[i] for i in kept]
-
         if valid_poses:
             filtered_poses[view_name] = valid_poses
         elif logger:
@@ -75,31 +41,26 @@ def _filter_poses_by_quality(poses_world_dict, bbox_score_threshold, filter_inco
 
 
 def _compute_hybrid_cost(kp1, kp2, verts_2d_1, verts_2d_2, F,
-                         matching_mode, mpjpe_weight=0.5,
+                         matching_mode,
                          max_mpjpe=300.0, epi_threshold=10.0, logger=None):
-    """Compute matching cost for hybrid / epipolar_only / pa_mpjpe modes.
+    """Compute matching cost for sparse / pa_mpjpe modes.
 
     Modes:
-        pa_mpjpe:      raw PA-MPJPE (mm)
-        epipolar_only: normalized epipolar distance [0, 1]
-        hybrid:        mpjpe_weight * mpjpe_norm + (1-mpjpe_weight) * epi_cost
+        pa_mpjpe: raw PA-MPJPE (mm)
+        sparse:   normalized epipolar distance [0, 1]
     """
     pa_mpjpe = compute_pa_mpjpe(kp1, kp2)
     if matching_mode == 'pa_mpjpe':
         return pa_mpjpe
-    mpjpe_norm = min(pa_mpjpe / max_mpjpe, 1.0)
     epi_cost = compute_epipolar_cost(verts_2d_1, verts_2d_2, F, epi_threshold, logger)
-    if matching_mode == 'epipolar_only':
+    if matching_mode == 'sparse':
         return epi_cost
-    elif matching_mode == 'hybrid':
-        return mpjpe_weight * mpjpe_norm + (1.0 - mpjpe_weight) * epi_cost
     raise ValueError(f"Unknown matching_mode: {matching_mode}")
 
 
 def _compute_pairwise_matches(poses_world_dict, view_names, matching_mode,
                               max_error_threshold, camera_params_dict,
-                              mpjpe_weight=0.5, epi_threshold=10.0,
-                              repr_threshold=30.0, logger=None):
+                              epi_threshold=10.0, repr_threshold=30.0, logger=None):
     """Compute pairwise pose matches across all view pairs using Hungarian algorithm.
 
     Returns:
@@ -112,7 +73,7 @@ def _compute_pairwise_matches(poses_world_dict, view_names, matching_mode,
     INVALID_COST = 1e6
 
     if logger:
-        logger.info(f"    Matching mode: {matching_mode}, mpjpe_weight={mpjpe_weight}, "
+        logger.info(f"    Matching mode: {matching_mode}, "
                     f"epi_threshold={epi_threshold}px, repr_threshold={repr_threshold}px")
 
     for i in range(num_views):
@@ -127,7 +88,7 @@ def _compute_pairwise_matches(poses_world_dict, view_names, matching_mode,
                 continue
 
             F = P1 = P2 = K1 = K2 = dist1 = dist2 = None
-            if matching_mode in ('epipolar_only', 'hybrid', 'epi_gate',
+            if matching_mode in ('sparse', 'epi_gate',
                                   'repr_gate', 'epi_gate_only') and camera_params_dict:
                 try:
                     R1, t1, K1 = get_transform_matrix(camera_params_dict[view1])
@@ -208,7 +169,7 @@ def _compute_pairwise_matches(poses_world_dict, view_names, matching_mode,
                     else:
                         cost_matrix[p1_idx, p2_idx] = _compute_hybrid_cost(
                             kp1, kp2, verts_2d_1, verts_2d_2, F,
-                            matching_mode, mpjpe_weight,
+                            matching_mode,
                             max_mpjpe=max_error_threshold or 300.0,
                             epi_threshold=epi_threshold,
                             logger=logger

@@ -98,12 +98,18 @@ def load_camera_parameters_xrmocap(camera_params_dict: Dict, camera_param_dir: s
 # RANSAC triangulation
 # ============================================================================
 
-def _dlt_triangulate_point(pts2d: np.ndarray, P_list: List[np.ndarray]) -> Optional[np.ndarray]:
-    """DLT triangulation for one 3D point from N >= 2 views."""
+def _dlt_triangulate_point(pts2d: np.ndarray, P_list: List[np.ndarray],
+                           weights: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+    """Confidence-weighted DLT triangulation for one 3D point from N >= 2 views.
+
+    Each view's pair of DLT equations is scaled by sqrt(weight) before the SVD,
+    so higher-confidence views (per-view detection score) pull the solution harder.
+    """
     A = []
-    for (x, y), P in zip(pts2d, P_list):
-        A.append(x * P[2] - P[0])
-        A.append(y * P[2] - P[1])
+    for i, ((x, y), P) in enumerate(zip(pts2d, P_list)):
+        w = 1.0 if weights is None else max(float(weights[i]), 1e-6) ** 0.5
+        A.append(w * (x * P[2] - P[0]))
+        A.append(w * (y * P[2] - P[1]))
     _, _, Vt = np.linalg.svd(np.array(A))
     X = Vt[-1]
     if abs(X[3]) < 1e-10:
@@ -122,25 +128,34 @@ def _reproj_error(pt3d: np.ndarray, pt2d: np.ndarray, P: np.ndarray) -> float:
 
 def _triangulate_point_ransac(pts2d_all: np.ndarray, P_all: List[np.ndarray],
                               valid_mask: np.ndarray,
-                              reproj_threshold: float = 20.0) -> Optional[np.ndarray]:
+                              reproj_threshold: float = 20.0,
+                              weights_all: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
     """Per-keypoint RANSAC triangulation.
 
     Enumerates all view-pair hypotheses, picks the one with the most inliers,
-    then re-triangulates from all inlier views via least-squares DLT.
+    then re-triangulates from all inlier views via confidence-weighted DLT.
+    Inlier consensus search itself is unweighted (purely geometric); only the
+    final triangulation math uses weights_all (per-view detection confidence).
     """
     valid_idx = np.where(valid_mask)[0]
     n_valid = len(valid_idx)
     if n_valid < 2:
         return None
+
+    def _w(idx):
+        return weights_all[idx] if weights_all is not None else None
+
     if n_valid == 2:
-        return _dlt_triangulate_point(pts2d_all[valid_idx], [P_all[i] for i in valid_idx])
+        return _dlt_triangulate_point(pts2d_all[valid_idx], [P_all[i] for i in valid_idx],
+                                      weights=_w(valid_idx))
 
     best_pt3d = best_inlier_idx = None
     best_n_inliers = -1
     best_mean_err = float('inf')
 
     for pair in combinations(valid_idx, 2):
-        pt3d = _dlt_triangulate_point(pts2d_all[list(pair)], [P_all[i] for i in pair])
+        pt3d = _dlt_triangulate_point(pts2d_all[list(pair)], [P_all[i] for i in pair],
+                                      weights=_w(list(pair)))
         if pt3d is None or not np.all(np.isfinite(pt3d)):
             continue
         errors = [_reproj_error(pt3d, pts2d_all[i], P_all[i]) for i in valid_idx]
@@ -156,13 +171,15 @@ def _triangulate_point_ransac(pts2d_all: np.ndarray, P_all: List[np.ndarray],
 
     if best_inlier_idx and len(best_inlier_idx) >= 2:
         refined = _dlt_triangulate_point(pts2d_all[best_inlier_idx],
-                                         [P_all[i] for i in best_inlier_idx])
+                                         [P_all[i] for i in best_inlier_idx],
+                                         weights=_w(best_inlier_idx))
         if refined is not None and np.all(np.isfinite(refined)):
             return refined
 
     if best_pt3d is not None:
         return best_pt3d
-    return _dlt_triangulate_point(pts2d_all[valid_idx], [P_all[i] for i in valid_idx])
+    return _dlt_triangulate_point(pts2d_all[valid_idx], [P_all[i] for i in valid_idx],
+                                  weights=_w(valid_idx))
 
 
 def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[str],
@@ -174,6 +191,9 @@ def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[st
                                logger=None) -> Optional[np.ndarray]:
     """Triangulate all keypoints for one cluster using per-keypoint RANSAC.
 
+    Each view is weighted by its bbox detection confidence (the only per-detection
+    confidence this pipeline produces) in the final DLT solve.
+
     Returns:
         (n_keypoints, 3) array or None
     """
@@ -183,10 +203,12 @@ def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[st
     pts2d_all = np.zeros((n_views, n_keypoints, 2), dtype=np.float64)
     valid_mask = np.zeros((n_views, n_keypoints), dtype=bool)
     P_all = [proj_matrices[v] for v in view_names_sorted]
+    weights_all = np.ones(n_views, dtype=np.float64)
 
     for vi, view_name in enumerate(view_names_sorted):
         if view_name not in poses_dict:
             continue
+        weights_all[vi] = float(poses_dict[view_name].get('scores', 1.0))
         kpts = poses_dict[view_name].get('pred_keypoints_2d')
         if kpts is None or kpts.shape[1] < 2:
             continue
@@ -216,7 +238,8 @@ def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[st
     points3d = np.zeros((n_keypoints, 3), dtype=np.float64)
     for ki in range(n_keypoints):
         pt = _triangulate_point_ransac(pts2d_all[:, ki, :], P_all, valid_mask[:, ki],
-                                       reproj_threshold=reproj_threshold)
+                                       reproj_threshold=reproj_threshold,
+                                       weights_all=weights_all)
         if pt is not None:
             points3d[ki] = pt
 
