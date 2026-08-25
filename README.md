@@ -121,11 +121,11 @@ python epipolar_matching_clustering.py \
 | `--epi_threshold` | Epipolar distance threshold (pixels) | `8.0` |
 | `--repr_threshold` | BBox center reprojection error threshold | `10.0` |
 | `--min_views_cluster` | Minimum views required to form a valid person cluster | `4` |
-| `--num_frames` | Total frames to process, **required** — covers every frame including zero-detection ones so Stage 3's GT denominator is never silently undercounted (see [Frame completeness](#frame-completeness)) | — |
+| `--num_frames` | Total frames to process, **required** — covers every frame including zero-detection ones so Stage 3's GT denominator is never silently undercounted | — |
 | `--start_frame` | First frame number | `0` |
 | `--frame_step` | Stride between frame numbers — Human-M3 is contiguous (`1`), SportCenter clips seen during development are sampled every 3rd frame | `1` |
 | `--keypoint_convention` | `sportcenter_13` or `humanm3_15` (adds pelvis/neck to match Human-M3's own evaluation protocol — see [Keypoint conventions](#keypoint-conventions)) | `sportcenter_13` |
-| `--vertex_sample_rate` | Use every Nth mesh vertex for the epipolar cost, 1=all (see [Table 7](#reproducing-table-7--vertex-subsampling)) | `1` |
+| `--vertex_sample_rate` | Use every Nth mesh vertex for the epipolar cost, 1=all (see [Table 7](#vertex-subsampling)) | `1` |
 | `--visualize_matches` | Save per-frame match visualization images | `False` |
 
 **Output:**
@@ -221,7 +221,7 @@ MAEM is retraining-free — there is no training step or learned weights anywher
 ```
 bash run_threshold_sensitivity_experiment.sh
 ```
-Each run's `evaluation_results_xrmocap.json` (recall/MPJPE/AP) lands under `output/sensitivity_experiment/<parameter>/<value>/`; plot whichever metric Figure 4 uses against the swept value. The script skips any run whose output already exists, so it can be interrupted and resumed.
+Each run's `evaluation_results_xrmocap.json` (recall/MPJPE/AP) lands under `output/sensitivity_experiment/<parameter>/<value>/run/`; plot whichever metric Figure 4 uses against the swept value. The script skips any run whose output already exists, so it can be interrupted and resumed.
 
 ## Vertex Subsampling
 

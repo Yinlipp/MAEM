@@ -11,7 +11,7 @@ SCENE_DIR="/path/to/humanm3/train/basketball1/split1/images"
 GT_FILE="/path/to/humanm3/train/basketball1/split1/keypoints3d_GT.npz"
 VIEW_NAME_PATTERN="camera_{i}"
 NUM_VIEWS=4
-CAMERA_PARAM_PATTERN="fisheye_param_{i:02d}.json"
+CAMERA_PARAM_PATTERN="camera_{i}.json"
 START_FRAME=0
 NUM_FRAMES=1800
 
