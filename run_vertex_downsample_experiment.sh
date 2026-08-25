@@ -7,26 +7,31 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXP_DIR="$SCRIPT_DIR/output/vertex_downsample_experiment"
 
-OUTPUT_DIR="/work7/y_li/sam-3d-body/output/humanm3/basketball1/split1"
-CAMERA_PARAM_DIR="/home/y_li/workspace7/humanm3/test/basketball1/split1/camera_calibration"
-SCENE_DIR="/home/y_li/workspace7/humanm3/test/basketball1/split1/images"
-GT_FILE="/home/y_li/workspace7/humanm3/test/basketball1/split1/keypoints3d_GT.npz"
+# ==== Edit these for your layout ====
+OUTPUT_DIR="/path/to/stage1_output/basketball1/split1"
+CAMERA_PARAM_DIR="/path/to/humanm3/test/basketball1/split1/camera_calibration"
+SCENE_DIR="/path/to/humanm3/test/basketball1/split1/images"
+GT_FILE="/path/to/humanm3/test/basketball1/split1/keypoints3d_GT.npz"
 VIEW_NAME_PATTERN="camera_{i}"
 NUM_VIEWS=4
 CAMERA_PARAM_PATTERN="camera_{i}.json"
 START_FRAME=1800
 NUM_FRAMES=200
 
+SAM3D_CONDA_ENV="sam_3d_body"   # conda env name from SAM 3D Body's INSTALL.md (README Stage 1)
+XRMOCAP_CONDA_ENV="xrmocap"     # conda env name from xrMoCap's install docs (README Stage 3)
+# =====================================
+
 BBOX=0.7
 REPR=30.0
-EPI=5.0
+EPI=8.0
 KMIN=2
 RANSAC=20.0
 
 RATES="1 2 4 8 16 32 64"
 
 mkdir -p "$EXP_DIR"
-source /home/y_li/workspace7/Anaconda3/etc/profile.d/conda.sh
+source "$(conda info --base)/etc/profile.d/conda.sh"
 
 echo "================ Stage 2 (parallel over rates) ================"
 for RATE in $RATES; do
@@ -37,7 +42,7 @@ for RATE in $RATES; do
         continue
     fi
     (
-        conda activate sam3db
+        conda activate "$SAM3D_CONDA_ENV"
         { time python3 "$SCRIPT_DIR/epipolar_matching_clustering.py" \
             --output_dir "$OUTPUT_DIR" \
             --camera_param_dir "$CAMERA_PARAM_DIR" \
@@ -76,7 +81,7 @@ for RATE in $RATES; do
         continue
     fi
     (
-        conda activate xcap
+        conda activate "$XRMOCAP_CONDA_ENV"
         { time python3 "$SCRIPT_DIR/triangulation_evaluation.py" \
             --intermediate_input "$DIR/intermediate_matched_clusters.pkl" \
             --output_dir "$DIR" \
