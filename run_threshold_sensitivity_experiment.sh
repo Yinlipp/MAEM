@@ -2,6 +2,10 @@
 # One-at-a-time sweep of 5 pipeline thresholds around a baseline, evaluated end to end.
 # Each (parameter, value) run is independent, so Stage 2 runs (then Stage 3 runs) in parallel.
 #
+# Runs on the TRAIN split (basketball1/split1's train/ frames, never test/): thresholds are
+# picked here, then fixed and applied unchanged to test/ for every number reported in the
+# paper (see README's Train/Test Split section) — this script must never touch test/.
+#
 # Swept parameters:
 #   1. detection confidence   -> --bbox_score_threshold   (Stage 2, quality filter)
 #   2. bbox reprojection      -> --repr_threshold          (Stage 2, Stage-1 gate)
@@ -14,15 +18,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXP_DIR="$SCRIPT_DIR/output/sensitivity_experiment"
 
 # ==== Edit these for your layout ====
-OUTPUT_DIR="/path/to/stage1_output/basketball1/split1"
-CAMERA_PARAM_DIR="/path/to/humanm3/test/basketball1/split1/camera_calibration"
-SCENE_DIR="/path/to/humanm3/test/basketball1/split1/images"
-GT_FILE="/path/to/humanm3/test/basketball1/split1/keypoints3d_GT.npz"
+OUTPUT_DIR="/path/to/stage1_output/basketball1/split1_train"
+CAMERA_PARAM_DIR="/path/to/humanm3/train/basketball1/split1/camera_calibration"
+SCENE_DIR="/path/to/humanm3/train/basketball1/split1/images"
+GT_FILE="/path/to/humanm3/train/basketball1/split1/keypoints3d_GT.npz"
 VIEW_NAME_PATTERN="camera_{i}"
 NUM_VIEWS=4
 CAMERA_PARAM_PATTERN="camera_{i}.json"
-START_FRAME=1800
-NUM_FRAMES=200
+START_FRAME=0
+NUM_FRAMES=1800
 
 SAM3D_CONDA_ENV="sam_3d_body"   # conda env name from SAM 3D Body's INSTALL.md (README Stage 1)
 XRMOCAP_CONDA_ENV="xrmocap"     # conda env name from xrMoCap's install docs (README Stage 3)
