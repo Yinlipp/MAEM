@@ -51,7 +51,20 @@ def main():
                         help='Epipolar distance threshold (pixels)')
     parser.add_argument('--repr_threshold', type=float, default=10.0,
                         help='Reprojection error threshold (pixels)')
-
+    # Explicit frame range, not scanned from NPZ files (Stage 1 skips zero-detection frames)
+    parser.add_argument('--num_frames', type=int, required=True,
+                        help='Total number of frames to process')
+    parser.add_argument('--start_frame', type=int, default=0,
+                        help='First frame number')
+    parser.add_argument('--frame_step', type=int, default=1,
+                        help='Stride between frame numbers (SportCenter is sampled every 3rd frame)')
+    parser.add_argument('--visualize_matches', action='store_true', default=False,
+                        help='Save per-frame match visualization images')
+    parser.add_argument('--keypoint_convention', type=str, default='sportcenter_13',
+                        choices=['sportcenter_13', 'humanm3_15'],
+                        help='Keypoint set extracted from SAM-3D-Body predictions')
+    parser.add_argument('--vertex_sample_rate', type=int, default=1,
+                        help='Use every Nth mesh vertex for the epipolar cost (1=all)')
 
     args = parser.parse_args()
 
@@ -76,22 +89,9 @@ def main():
         camera_params_dict[view_name] = load_camera_params(param_file)
         logger.info(f"  {view_name}: {param_file}")
 
-    # Discover frames from the view with most NPZ files
-    ref_npz_dir = None
-    for vn in view_names:
-        candidate = os.path.join(args.output_dir, vn, 'npz')
-        if os.path.exists(candidate):
-            if ref_npz_dir is None or len(os.listdir(candidate)) > len(os.listdir(ref_npz_dir)):
-                ref_npz_dir = candidate
-    if not ref_npz_dir:
-        raise FileNotFoundError(f"No NPZ directory found under {args.output_dir}")
-    logger.info(f"Scanning frames from: {ref_npz_dir}")
-
-    frame_numbers = sorted(
-        int(f.split('.')[0])
-        for f in os.listdir(ref_npz_dir)
-        if f.endswith('.npz')
-    )
+    frame_numbers = list(range(args.start_frame,
+                               args.start_frame + args.num_frames * args.frame_step,
+                               args.frame_step))
     logger.info(f"Processing {len(frame_numbers)} frames...\n")
 
     all_frame_data = []
@@ -106,7 +106,8 @@ def main():
         with ThreadPoolExecutor(max_workers=len(view_names)) as executor:
             futures = {
                 executor.submit(load_view_data, vn, frame_num, args.output_dir,
-                                args.scene_dir, camera_params_dict): vn
+                                args.scene_dir, camera_params_dict,
+                                args.keypoint_convention, args.vertex_sample_rate): vn
                 for vn in view_names
             }
             for future in as_completed(futures):
@@ -116,29 +117,26 @@ def main():
                     logger.info(f"  {vn_result}: {len(view_poses)} person(s)")
 
         if not poses_world_dict:
-            logger.info("  No valid predictions, skipping")
-            continue
-
-        # Match poses
-        logger.info("  Performing cross-view matching...")
-        matched_clusters, gate_time = match_poses_across_views(
-            poses_world_dict,
-            min_views=args.min_views_cluster,
-            max_error_threshold=args.max_pa_mpjpe_threshold,
-            bbox_score_threshold=args.bbox_score_threshold,
-            matching_mode=args.matching_mode,
-            camera_params_dict=camera_params_dict,
-            epi_threshold=args.epi_threshold,
-            repr_threshold=args.repr_threshold,
-            logger=logger,
-        )
-        total_gate_time += gate_time
-        frames_with_matching += 1
-        logger.info(f"  Gate time: {gate_time * 1000:.2f}ms")
-
-        if not matched_clusters:
-            logger.info("  No matched clusters found")
-            continue
+            logger.info("  No valid predictions")
+            matched_clusters = []
+        else:
+            logger.info("  Performing cross-view matching...")
+            matched_clusters, gate_time = match_poses_across_views(
+                poses_world_dict,
+                min_views=args.min_views_cluster,
+                max_error_threshold=args.max_pa_mpjpe_threshold,
+                bbox_score_threshold=args.bbox_score_threshold,
+                matching_mode=args.matching_mode,
+                camera_params_dict=camera_params_dict,
+                epi_threshold=args.epi_threshold,
+                repr_threshold=args.repr_threshold,
+                logger=logger,
+            )
+            total_gate_time += gate_time
+            frames_with_matching += 1
+            logger.info(f"  Gate time: {gate_time * 1000:.2f}ms")
+            if not matched_clusters:
+                logger.info("  No matched clusters found")
 
         logger.info(f"  Found {len(matched_clusters)} matched person(s)")
         all_frame_data.append({
@@ -148,7 +146,7 @@ def main():
             'num_persons': len(matched_clusters),
         })
 
-        if args.visualize_matches:
+        if args.visualize_matches and matched_clusters:
             visualize_matched_clusters(
                 matched_clusters, frame_num, args.scene_dir,
                 os.path.join(args.output_dir, 'matched_visualizations'),
@@ -174,6 +172,9 @@ def main():
         }, f)
     logger.info(f"\nSaved {len(all_frame_data)} frames → {args.intermediate_output}")
     logger.info(f"Total persons: {sum(fd['num_persons'] for fd in all_frame_data)}")
+    assert len(all_frame_data) == args.num_frames, (
+        f"Frame-completeness check FAILED: {len(all_frame_data)} of {args.num_frames} frames saved")
+    logger.info(f"Frame-completeness check PASSED: all {args.num_frames} frames saved")
 
     # Save JSON summary
     matching_json = os.path.join(args.output_dir, 'matching_results.json')

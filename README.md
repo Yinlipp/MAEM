@@ -21,9 +21,9 @@ Please clone the official repository and set up environment configurations follo
     python sam_prediction.py \
     --checkpoints_dir     /path/to/checkpoints \
     --img_root_folder     /path/to/images \
-    --output_dir          /path/to/output \
-    --camera_param_dir    /path/to/camera_params \
-    --camera_param_pattern "fisheye_param_{i:02d}.json"
+    --output_dir          /path/to/output
+
+Run once per dataset (SportCenter, Basketball1/split1, Basketball1/split2, Basketball2), pointing `--img_root_folder`/`--output_dir` at that dataset's `images/` folder and a dataset-specific output directory.
 
 ```text
 Input:
@@ -44,44 +44,70 @@ Output:
 ```
 **Note:** `pred_keypoints_2d_verts` (2D projections of all 18,439 mesh vertices) is added by modifying SAM-3D-Body source and is required by the epipolar matching stage.
 
-**Note:** `--camera_param_dir`/`--camera_param_pattern` are optional but required to reproduce the paper's pipeline: each view's image is undistorted (`cv2.undistort`) *before* being fed to SAM 3D Body, so `pred_keypoints_2d`/`pred_keypoints_2d_verts`/`bbox` in the output NPZ are already in undistorted pixel space. Stage 2 and Stage 3 assume this and no longer undistort points themselves — if you omit these flags, all downstream stages will silently operate on distorted coordinates.
+**Note:** SAM 3D Body itself does not undistort — the NPZ output (`pred_keypoints_2d`/`pred_keypoints_2d_verts`/`bbox`) is in the original, distorted pixel space of the input images. Stage 2 and Stage 3 undistort these points themselves (`cv2.undistortPoints`) using each view's real camera `k1/k2/p1/p2/k3`, loaded from `--camera_param_dir`, before matching/triangulating. Passing the correct camera parameters is required for geometrically correct results on fisheye/distorted cameras (e.g. SportCenter).
 
 
 ## Stage 2 &mdash; Cross-view Matching and Clustering
 cd ..
 
-**SportCenter dataset** (6 fisheye cameras):
+**SportCenter dataset** (6 fisheye cameras, `ace_{i}` view naming):
 ```
 python epipolar_matching_clustering.py \
     --output_dir           /path/to/stage1_output \
     --camera_param_dir     /path/to/camera_params \
-    --scene_dir            /path/to/images \
+    --scene_dir             /path/to/images \
     --intermediate_output  /path/to/output/intermediate_matched_clusters.pkl \
     --view_name_pattern    "ace_{i}" \
-    --num_views            6 \
+    --num_views             6 \
     --camera_param_pattern "fisheye_param_{i:02d}.json" \
     --matching_mode        epi_gate \
     --bbox_score_threshold 0.9 \
-    --epi_threshold        8.0 \
-    --repr_threshold       10.0 \
-    --min_views_cluster    4
+    --epi_threshold         8.0 \
+    --repr_threshold        10.0 \
+    --min_views_cluster     4 \
+    --start_frame           <start_frame> \
+    --num_frames            <num_frames> \
+    --frame_step            <frame_step, 1 if contiguous>
 ```
 
-**Human-M3 dataset** (3 or 4 standard cameras):
+**Human-M3 Basketball1** (4 standard cameras). Basketball1's test set is two independent 200-frame clips (`split1`, `split2`) recorded from the same fixed 4-camera rig — both happen to be frame-numbered 1800–1999, so run each split as its own Stage 2/3 pass and combine them in Stage 3 (see [Combining Basketball1 + Basketball2](#combining-basketball1--basketball2-for-a-combined-table)):
 ```
+for SPLIT in split1 split2; do
 python epipolar_matching_clustering.py \
-    --output_dir           /path/to/stage1_output \
-    --camera_param_dir     /path/to/camera_params \
-    --scene_dir            /path/to/images \
-    --intermediate_output  /path/to/output/intermediate_matched_clusters.pkl \
+    --output_dir           /path/to/humanm3/test/basketball1/$SPLIT/stage1_output \
+    --camera_param_dir     /path/to/humanm3/test/basketball1/$SPLIT/camera_calibration \
+    --scene_dir             /path/to/humanm3/test/basketball1/$SPLIT/images \
+    --intermediate_output  /path/to/output/basketball1_$SPLIT/intermediate_matched_clusters.pkl \
     --view_name_pattern    "camera_{i}" \
-    --num_views            4 \
-    --camera_param_pattern "camera_{i}.json" \
+    --num_views             4 \
+    --camera_param_pattern "fisheye_param_{i:02d}.json" \
     --matching_mode        epi_gate \
     --bbox_score_threshold 0.7 \
-    --epi_threshold        8.0 \
-    --repr_threshold       30.0 \
-    --min_views_cluster    2
+    --epi_threshold         8.0 \
+    --repr_threshold        30.0 \
+    --min_views_cluster     2 \
+    --start_frame            1800 \
+    --num_frames             200
+done
+```
+
+**Human-M3 Basketball2** (3 standard cameras, 500-frame test clip starting at frame 4500):
+```
+python epipolar_matching_clustering.py \
+    --output_dir           /path/to/humanm3/test/basketball2/stage1_output \
+    --camera_param_dir     /path/to/humanm3/test/basketball2/camera_calibration \
+    --scene_dir             /path/to/humanm3/test/basketball2/images \
+    --intermediate_output  /path/to/output/basketball2/intermediate_matched_clusters.pkl \
+    --view_name_pattern    "camera_{i}" \
+    --num_views             3 \
+    --camera_param_pattern "fisheye_param_{i:02d}.json" \
+    --matching_mode        epi_gate \
+    --bbox_score_threshold 0.7 \
+    --epi_threshold         8.0 \
+    --repr_threshold        30.0 \
+    --min_views_cluster     2 \
+    --start_frame            4500 \
+    --num_frames             500
 ```
 **Key parameters:**
 
@@ -95,6 +121,11 @@ python epipolar_matching_clustering.py \
 | `--epi_threshold` | Epipolar distance threshold (pixels) | `8.0` |
 | `--repr_threshold` | BBox center reprojection error threshold | `10.0` |
 | `--min_views_cluster` | Minimum views required to form a valid person cluster | `4` |
+| `--num_frames` | Total frames to process, **required** — covers every frame including zero-detection ones so Stage 3's GT denominator is never silently undercounted (see [Frame completeness](#frame-completeness)) | — |
+| `--start_frame` | First frame number | `0` |
+| `--frame_step` | Stride between frame numbers — Human-M3 is contiguous (`1`), SportCenter clips seen during development are sampled every 3rd frame | `1` |
+| `--keypoint_convention` | `sportcenter_13` or `humanm3_15` (adds pelvis/neck to match Human-M3's own evaluation protocol — see [Keypoint conventions](#keypoint-conventions)) | `sportcenter_13` |
+| `--vertex_sample_rate` | Use every Nth mesh vertex for the epipolar cost, 1=all (see [Table 7](#reproducing-table-7--vertex-subsampling)) | `1` |
 | `--visualize_matches` | Save per-frame match visualization images | `False` |
 
 **Output:**
@@ -104,10 +135,26 @@ python epipolar_matching_clustering.py \
 | `intermediate_matched_clusters.pkl` | Per-frame person clusters, each with 2D keypoints per view, used as input to Stage 3 |
 | `matching_results.json` | Human-readable summary: per-frame match info, scores, cluster sizes |
 
+### Frame completeness
+
+Stage 1 does not write an NPZ for a frame with zero detections. Older versions of this pipeline discovered frame numbers by scanning which NPZ files exist on disk, which silently dropped those frames — their GT persons would never reach Stage 3's recall/AP denominator, inflating the reported numbers. Stage 2 now always processes the explicit `[start_frame, start_frame + num_frames)` range and writes an entry (possibly with zero matched clusters) for every one of them; it asserts `len(all_frame_data) == num_frames` before saving. Stage 3 asserts its input frame count equals the GT file's frame count before evaluating. Both checks fail loudly (`AssertionError`) rather than silently producing an inflated number.
+
+### Keypoint conventions
+
+`pred_keypoints_3d`/`pred_keypoints_2d` are reduced from SAM-3D-Body's 70-keypoint MHR output (`sam_3d_body/metadata/mhr70.py`) to a fixed subset. Two conventions are supported, selected per-dataset:
+
+| `--keypoint_convention` | Joints | Used for |
+|---|---|---|
+| `sportcenter_13` (default) | head, L/R shoulder, L/R elbow, L/R wrist, L/R hip, L/R knee, L/R ankle | SportCenter, and legacy Human-M3 results computed against a 13-point GT |
+| `humanm3_15` | the above **plus pelvis and neck**, in Human-M3's own joint order | matching Human-M3's official evaluation protocol (`lib/dataset/human_m3.py`'s `valid_joints_def`), for numbers meant to be compared against MMVP |
+
+SAM-3D-Body has no dedicated pelvis keypoint; `humanm3_15` derives it as the left-hip/right-hip midpoint, the same convention SAM-3D-Body's own source uses internally (`sam3d_body.py`: `pelvis_idx = [9, 10]`). `neck` is MHR keypoint 69. Using `humanm3_15` requires a matching 15-point `keypoints3d_GT.npz` — see `pose_calib/*.json` in the Human-M3 dataset for the raw 15-point annotations (already in Human-M3's own joint order; no reordering needed to build the GT file, only the homogeneous-coordinate/mask packing shown in "Ground truth file format" below).
+
    
 ## Stage 3 — Triangulation and Evaluation
 
-Triangulate matched clusters into 3D poses using RANSAC, then compute MPJPE, PA-MPJPE and AP against ground truth.
+Triangulate matched clusters into 3D poses using RANSAC, then compute MPJPE, PA-MPJPE, Recall and AP against ground truth, following Human-M3's own protocol (`lib/dataset/human_m3.py`): each prediction independently finds its own nearest GT (no Hungarian assignment), duplicates are resolved by confidence ranking, and AP is computed at the same six thresholds Human-M3 uses (25/50/75/100/125/150mm). The confidence signal is this pipeline's own mean bbox-detection score across the views that contributed to each triangulated person — not Human-M3's CuboidProposalNet person-confidence — so the *protocol* matches but the resulting numbers are not bit-comparable to Human-M3/MMVP-paper values.
+
 This step utilizes [xrMoCap](https://github.com/openxrlab/xrmocap) as an external dependency. Please ensure you have cloned their official repository and configured the necessary environment following [official instruction](https://github.com/openxrlab/xrmocap/blob/main/docs/en/installation.md).
 
 ```
@@ -121,6 +168,37 @@ python triangulation_evaluation.py \
     --reproj_threshold    20.0
 ```
 
+`--intermediate_input` and `--gt_file` each accept multiple, space-separated paths (same count, same order) to combine several datasets into one evaluation — see [Combining Basketball1 + Basketball2](#combining-basketball1--basketball2-for-a-combined-table). Even a single dataset's outputs land one level down, at `<output_dir>/dataset0/` (or `<output_dir>/<name>/` if `--dataset_name` is given), alongside a top-level `evaluation_results_combined.json`.
+
+
+### Combining Basketball1 + Basketball2 for a combined table
+
+Pass every split's `intermediate_matched_clusters.pkl`/`keypoints3d_GT.npz` pair in one call. Metrics are reported **per dataset** (each split/scene evaluated on its own) and **combined** — the combined numbers are computed from the union of all datasets' predictions in one Human-M3-style `eval_list` (matching how Human-M3 itself evaluates multiple scenes as one combined set), not by averaging the per-dataset numbers after the fact:
+
+```
+python triangulation_evaluation.py \
+    --intermediate_input  out/basketball1_split1/intermediate_matched_clusters.pkl \
+                          out/basketball1_split2/intermediate_matched_clusters.pkl \
+                          out/basketball2/intermediate_matched_clusters.pkl \
+    --gt_file             /path/to/basketball1/split1/keypoints3d_GT.npz \
+                          /path/to/basketball1/split2/keypoints3d_GT.npz \
+                          /path/to/basketball2/keypoints3d_GT.npz \
+    --dataset_name        basketball1_split1 basketball1_split2 basketball2 \
+    --output_dir           out/combined \
+    --reproj_threshold     20.0
+```
+To get a Basketball1-only row (split1+split2 combined) and a Basketball2-only row instead, run the same command twice — once with just the two `basketball1_*` pairs, once with just `basketball2` — or read the per-dataset breakdown out of the combined run's `evaluation_results_combined.json` (see below) and combine whichever subset your table needs by re-running with just those datasets.
+
+**Output (single-dataset run):**
+
+| File | Description |
+|---|---|
+| `<output_dir>/<dataset_name>/predicted_3d_poses_xrmocap.npz` | Triangulated 3D poses, padded `(n_frames, n_persons, n_kpts, 3)` |
+| `<output_dir>/<dataset_name>/predicted_3d_poses_gt_format.npz` | Same triangulated poses, reshaped to match the GT array for direct comparison |
+| `<output_dir>/<dataset_name>/evaluation_results_xrmocap.json` | This dataset's MPJPE / PA-MPJPE / Recall / AP |
+| `<output_dir>/evaluation_results_combined.json` | `{datasets, per_dataset, per_dataset_triangulation_time_sec, combined}` — always written, even for a single dataset |
+| `part2_triangulation_<timestamp>.log` | Evaluation log, per-frame nearest-GT matches, and per-dataset triangulation runtime |
+
 **Ground truth file format (`keypoints3d_GT.npz`):**
 
 | Key | Shape | Description |
@@ -132,21 +210,54 @@ python triangulation_evaluation.py \
 Persons with `mask.sum() == 0` are placeholder slots and are skipped during evaluation. Only joints where `mask == 1` contribute to MPJPE.
 For more file format information, please refer to [xrmocap official instructions](https://github.com/openxrlab/xrmocap/blob/main/docs/en/data_structure/keypoints.md)
 
+**Metrics report** (per dataset and combined):
 
-**Output:**
+- **MPJPE@500mm** — mean/median Per Joint Position Error (mm) of the confidence-ranked, de-duplicated true-positive set (Human-M3's own `_eval_list_to_mpjpe` at its default 500mm gate)
+- **PA-MPJPE** — Procrustes-Aligned MPJPE (mm) over that same TP set; not part of Human-M3's own protocol, reported as a bonus
+- **Recall@500mm** — fraction of GT persons matched within 500mm, no confidence de-duplication (Human-M3's `_eval_list_to_recall`)
+- **AP@25/50/75/100/125/150mm** — confidence-ranked, all-point-interpolated average precision at each of Human-M3's six thresholds (`_eval_list_to_ap`)
 
-| File | Description |
-|---|---|
-| `predicted_3d_poses_xrmocap.npz` | Triangulated 3D poses, padded `(n_frames, n_persons, n_kpts, 3)` |
-| `predicted_3d_poses_gt_format.npz` | Same triangulated poses, reshaped to match the GT array for direct comparison |
-| `evaluation_results_xrmocap.json` | MPJPE / PA-MPJPE / Recall@δ / AP@δ metrics |
-| `part2_triangulation_<timestamp>.log` | Evaluation log with per-frame MPJPE and PA-MPJPE |
+---
 
-**Metrics report:**
+## Train/Test Split
 
-- **MPJPE** — Mean Per Joint Position Error (mm)
-- **PA-MPJPE** — Procrustes-Aligned MPJPE (mm), removes global rotation/scale/translation
-- **APδ**  — Average Precision at threshold δ mm
+MAEM is retraining-free — there is no training step or learned weights anywhere in this pipeline, so `train/` is never used to fit a model. It's only used once, manually, to pick the pipeline's thresholds (`--bbox_score_threshold`, `--epi_threshold`, `--repr_threshold`, `--min_views_cluster`, `--reproj_threshold`): those values are confirmed by running on `train/`, then **fixed** and applied unchanged to `test/` for every number reported in the paper. Stage 1/2/3 themselves only ever run against `test/`:
+
+| Split | Frames | Used by MAEM? |
+|---|---|---|
+| `test/basketball1/split1` | 200 (1800–1999) | yes |
+| `test/basketball1/split2` | 200 (1800–1999, different clip, same camera rig) | yes |
+| `test/basketball2` | 500 (4500–4999) | yes |
+| `train/basketball1/split1`, `split2` | 1800 each | no |
+| `train/basketball2` | 4500 | no |
+
+Basketball1's two test splits are independent recordings from the same fixed 4-camera setup that happen to share a frame-number range — they are not two halves of one clip, so run Stage 2 separately per split (see the Basketball1 command above) and combine at Stage 3.
+
+---
+
+## Reproducing Figure 4 — Threshold Sensitivity
+
+`run_threshold_sensitivity_experiment.sh` sweeps each of the 5 pipeline thresholds one at a time around a fixed baseline (detection confidence, bbox reprojection, mesh epipolar distance, Kmin, RANSAC inlier threshold), running Stage 2 + Stage 3 for every value. Edit the path variables at the top of the script for your data layout, then:
+```
+bash run_threshold_sensitivity_experiment.sh
+```
+Each run's `evaluation_results_xrmocap.json` (recall/MPJPE/AP) lands under `output/sensitivity_experiment/<parameter>/<value>/`; plot whichever metric Figure 4 uses against the swept value. The script skips any run whose output already exists, so it can be interrupted and resumed.
+
+## Reproducing Table 7 — Vertex Subsampling
+
+`run_vertex_downsample_experiment.sh` sweeps `--vertex_sample_rate` (1, 2, 4, 8, 16, 32, 64— i.e. 1×, 1/2×, 1/4×, ... of the ~18,439 mesh vertices used for the Stage-2 epipolar gate) holding everything else at baseline:
+```
+bash run_vertex_downsample_experiment.sh
+```
+Results land under `output/vertex_downsample_experiment/rate_<N>/`; each `driver_stage2.log` also has the wall-clock Stage 2 runtime (from the shell `time` builtin) for the speed side of the accuracy/speed trade-off table.
+
+## Runtime Measurement
+
+No separate profiling tool needed — both stages log their own timing directly:
+- **Stage 2**: `Gate timing (<mode>): <n> frames, total=<ms>, avg=<ms>/frame` in the log.
+- **Stage 3**: `Triangulation time: <s>s total, <ms>/frame` per dataset, and the same number under `per_dataset_triangulation_time_sec` in `evaluation_results_combined.json`.
+
+For full wall-clock time (including model I/O), just `time` the whole command — the two sweep scripts above already do this per run via the shell `time` builtin.
 
 ---
 

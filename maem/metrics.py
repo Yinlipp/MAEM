@@ -1,6 +1,6 @@
-"""Evaluation metrics: MPJPE, PA-MPJPE, and AP_delta."""
+"""Evaluation metrics: MPJPE, PA-MPJPE, and Human-M3's official AP/recall protocol."""
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 
@@ -46,39 +46,46 @@ def compute_pa_mpjpe(pred: np.ndarray, gt: np.ndarray, mask: Optional[np.ndarray
     return float(np.mean(distances[valid]))
 
 
-def compute_ap_delta(entries: List[Tuple[float, float, int, Optional[int]]],
-                     delta: float, total_gt: int) -> float:
-    """AP_delta via all-point interpolation over confidence-ranked Hungarian matches.
-
-    TP iff MPJPE < delta and the GT isn't already claimed by a higher-confidence
-    prediction; unassigned (surplus) predictions are always FP.
-    """
-    if total_gt == 0 or not entries:
+def eval_list_to_ap_official(eval_list: List[Dict], total_gt: int, threshold_mm: float) -> float:
+    """Human-M3's AP formula (lib/dataset/human_m3.py: _eval_list_to_ap), reproduced verbatim."""
+    if total_gt == 0 or not eval_list:
         return 0.0
-
-    ranked = sorted(entries, key=lambda e: e[0], reverse=True)
-    claimed = set()
-    tp = np.zeros(len(ranked))
-    fp = np.zeros(len(ranked))
-
-    for i, (conf, mpjpe, frame_idx, gt_idx) in enumerate(ranked):
-        key = (frame_idx, gt_idx)
-        if gt_idx is not None and mpjpe < delta and key not in claimed:
+    ranked = sorted(eval_list, key=lambda k: k['score'], reverse=True)
+    total_num = len(ranked)
+    tp = np.zeros(total_num)
+    fp = np.zeros(total_num)
+    gt_det = []
+    for i, item in enumerate(ranked):
+        if item['mpjpe'] < threshold_mm and item['gt_id'] is not None and item['gt_id'] not in gt_det:
             tp[i] = 1
-            claimed.add(key)
+            gt_det.append(item['gt_id'])
         else:
             fp[i] = 1
+    tp = np.cumsum(tp)
+    fp = np.cumsum(fp)
+    recall = tp / (total_gt + 1e-5)
+    precise = tp / (tp + fp + 1e-5)
+    for n in range(total_num - 2, -1, -1):
+        precise[n] = max(precise[n], precise[n + 1])
+    precise = np.concatenate(([0], precise, [0]))
+    recall = np.concatenate(([0], recall, [1]))
+    index = np.where(recall[1:] != recall[:-1])[0]
+    return float(np.sum((recall[index + 1] - recall[index]) * precise[index + 1]))
 
-    tp_cum = np.cumsum(tp)
-    fp_cum = np.cumsum(fp)
-    recall = tp_cum / total_gt
-    precision = tp_cum / np.maximum(tp_cum + fp_cum, 1e-12)
 
-    # envelope precision non-increasing, then integrate
-    mrec = np.concatenate(([0.0], recall, [1.0]))
-    mpre = np.concatenate(([0.0], precision, [0.0]))
-    for i in range(len(mpre) - 2, -1, -1):
-        mpre[i] = max(mpre[i], mpre[i + 1])
+def eval_list_to_mpjpe_official(eval_list: List[Dict], threshold_mm: float = 500.0) -> float:
+    """Human-M3's _eval_list_to_mpjpe: confidence-sorted, greedy-deduped mean MPJPE of TPs."""
+    ranked = sorted(eval_list, key=lambda k: k['score'], reverse=True)
+    gt_det = []
+    mpjpes = []
+    for item in ranked:
+        if item['mpjpe'] < threshold_mm and item['gt_id'] is not None and item['gt_id'] not in gt_det:
+            mpjpes.append(item['mpjpe'])
+            gt_det.append(item['gt_id'])
+    return float(np.mean(mpjpes)) if mpjpes else float('inf')
 
-    idx = np.where(mrec[1:] != mrec[:-1])[0]
-    return float(np.sum((mrec[idx + 1] - mrec[idx]) * mpre[idx + 1]))
+
+def eval_list_to_recall_official(eval_list: List[Dict], total_gt: int, threshold_mm: float = 500.0) -> float:
+    """Human-M3's _eval_list_to_recall: any prediction within threshold counts, no dedup."""
+    gt_ids = [e['gt_id'] for e in eval_list if e['mpjpe'] < threshold_mm and e['gt_id'] is not None]
+    return len(set(gt_ids)) / total_gt if total_gt > 0 else 0.0

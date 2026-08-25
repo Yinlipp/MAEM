@@ -6,6 +6,7 @@ import json
 import os
 import pickle
 import sys
+import time
 
 import numpy as np
 
@@ -16,58 +17,64 @@ if _XRMOCAP_PATH not in sys.path:
 
 from xrmocap.ops.triangulation.aniposelib_triangulator import AniposelibTriangulator
 
-try:
-    from scipy.optimize import linear_sum_assignment as _lsa
-    def _hungarian(cost_matrix):
-        row_ind, col_ind = _lsa(cost_matrix)
-        return list(zip(row_ind, col_ind))
-except ImportError:
-    from munkres import Munkres
-    _munkres = Munkres()
-    def _hungarian(cost_matrix):
-        return _munkres.compute(cost_matrix.tolist())
-
 from maem.logging_utils import setup_logger
-from maem.metrics import compute_mpjpe, compute_pa_mpjpe, compute_ap_delta
+from maem.metrics import (compute_mpjpe, compute_pa_mpjpe, eval_list_to_ap_official,
+                          eval_list_to_mpjpe_official, eval_list_to_recall_official)
 from maem.triangulation import (load_projection_matrices,
                                 load_camera_parameters_xrmocap,
                                 fuse_poses)
 
+MATCH_THRESHOLD_MM = 500.0
+AP_THRESHOLDS = [25, 50, 75, 100, 125, 150]  # Human-M3: np.arange(0.025, 0.155, 0.025) in mm
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Stage 3: RANSAC triangulation and evaluation'
-    )
-    # required, no hard-coded defaults
-    parser.add_argument('--intermediate_input', type=str, required=True,
-                        help='Path to matched_clusters.pkl from Stage 2')
-    parser.add_argument('--output_dir', type=str, required=True,
-                        help='Output directory for results')
-    parser.add_argument('--gt_file', type=str, required=True,
-                        help='Ground truth NPZ file (keypoints3d_GT.npz)')
-    parser.add_argument('--save_3d_poses', action='store_true', default=True,
-                        help='Save triangulated 3D poses to NPZ')
-    parser.add_argument('--reproj_threshold', type=float, default=20.0,
-                        help='RANSAC reprojection inlier threshold (pixels)')
-    args = parser.parse_args()
 
-    logger, log_file = setup_logger(args.output_dir, 'part2_triangulation')
-    logger.info(f"Log file: {log_file}")
-    logger.info("=" * 80)
-    logger.info("Stage 3: Triangulation and Evaluation")
-    logger.info("=" * 80)
-    logger.info(f"Intermediate input: {args.intermediate_input}")
-    logger.info(f"Output dir:         {args.output_dir}")
-    logger.info(f"GT file:            {args.gt_file}")
-    logger.info("")
+def compute_stats(eval_list, total_gt):
+    """Recall/MPJPE/PA-MPJPE/AP off one eval_list, Human-M3-protocol (see maem.metrics)."""
+    recall = eval_list_to_recall_official(eval_list, total_gt, MATCH_THRESHOLD_MM)
+    mean_mpjpe = eval_list_to_mpjpe_official(eval_list, MATCH_THRESHOLD_MM)
+    ap_values = {t: eval_list_to_ap_official(eval_list, total_gt, t) for t in AP_THRESHOLDS}
 
-    # Load Stage 2 output
-    logger.info("Loading Stage 2 data...")
-    import numpy.core._multiarray_umath as _mu
-    sys.modules['numpy._core._multiarray_umath'] = _mu
-    sys.modules['numpy._core'] = np.core
+    ranked = sorted(eval_list, key=lambda k: k['score'], reverse=True)
+    gt_det = []
+    tp_mpjpes, tp_pa_mpjpes = [], []
+    for item in ranked:
+        if item['mpjpe'] < MATCH_THRESHOLD_MM and item['gt_id'] is not None and item['gt_id'] not in gt_det:
+            gt_det.append(item['gt_id'])
+            tp_mpjpes.append(item['mpjpe'])
+            tp_pa_mpjpes.append(item['pa_mpjpe'])
 
-    with open(args.intermediate_input, 'rb') as f:
+    return {
+        'total_gt': total_gt,
+        'total_matched': len(tp_mpjpes),
+        'recall': recall,
+        'mean_mpjpe': mean_mpjpe,
+        'median_mpjpe': float(np.median(tp_mpjpes)) if tp_mpjpes else float('inf'),
+        'mean_pa_mpjpe': float(np.mean(tp_pa_mpjpes)) if tp_pa_mpjpes else float('inf'),
+        'median_pa_mpjpe': float(np.median(tp_pa_mpjpes)) if tp_pa_mpjpes else float('inf'),
+        **{f'ap{t}mm': ap_values[t] for t in AP_THRESHOLDS},
+    }
+
+
+def log_stats(logger, label, stats):
+    logger.info(f"[{label}] GT persons: {stats['total_gt']}")
+    logger.info(f"[{label}] Matched@{MATCH_THRESHOLD_MM:.0f}mm: {stats['total_matched']}  "
+                f"(Recall: {stats['recall']*100:.2f}%)")
+    logger.info(f"[{label}] MPJPE@{MATCH_THRESHOLD_MM:.0f}mm: {stats['mean_mpjpe']:.2f}mm mean, "
+                f"{stats['median_mpjpe']:.2f}mm median")
+    logger.info(f"[{label}] PA-MPJPE (bonus): {stats['mean_pa_mpjpe']:.2f}mm mean, "
+                f"{stats['median_pa_mpjpe']:.2f}mm median")
+    for t in AP_THRESHOLDS:
+        logger.info(f"[{label}] AP@{t}mm: {stats[f'ap{t}mm']*100:.2f}%")
+
+
+def process_dataset(name, intermediate_input, gt_file, reproj_threshold,
+                    output_dir, save_3d_poses, logger):
+    """Triangulate + match one dataset; gt_id is locally 0-based, main() offsets it when merging."""
+    logger.info(f"\n{'=' * 80}\nDataset: {name}\n{'=' * 80}")
+    logger.info(f"Intermediate input: {intermediate_input}")
+    logger.info(f"GT file:            {gt_file}")
+
+    with open(intermediate_input, 'rb') as f:
         intermediate_data = pickle.load(f)
 
     all_frame_data = intermediate_data['all_frame_data']
@@ -76,50 +83,38 @@ def main():
 
     logger.info(f"  {len(all_frame_data)} frames, "
                 f"{sum(fd['num_persons'] for fd in all_frame_data)} clusters total")
-    logger.info("")
 
-    # Load camera parameters
-    logger.info("Loading camera parameters...")
     camera_params_xrmocap = load_camera_parameters_xrmocap(camera_params_dict, camera_param_dir)
-    proj_matrices, _, _ = load_projection_matrices(camera_params_dict, camera_param_dir)
+    proj_matrices, K_dict, dist_dict = load_projection_matrices(camera_params_dict, camera_param_dir)
     view_names_sorted = sorted(camera_params_dict.keys())
     logger.info(f"  {len(camera_params_xrmocap)} cameras: {', '.join(view_names_sorted)}")
-    logger.info("")
 
-    # Create fallback triangulator
     triangulator = AniposelibTriangulator(camera_parameters=camera_params_xrmocap)
 
-    # Load GT
-    logger.info(f"Loading GT from {args.gt_file}...")
-    gt_data = np.load(args.gt_file)
+    gt_data = np.load(gt_file)
     gt_poses = gt_data['pose']
     gt_mask = gt_data.get('mask') if 'mask' in gt_data else None
     logger.info(f"  GT shape: {gt_poses.shape}")
-    logger.info("")
-
-    # Per-frame processing
-    all_mpjpe, all_pa_mpjpe, all_frame_summaries = [], [], []
-    total_gt_count = total_matched_count = 0
-    all_frames_poses = []
-    frame_to_idx_mapping = {}
-    # (confidence, mpjpe_to_assigned_gt_or_inf, frame_idx, gt_idx_or_None) per prediction
-    all_predictions_for_ap = []
-
-    MATCH_THRESHOLD_MM = 500.0
-    INF_COST = 1e9
     N_KEYPOINTS = gt_poses.shape[2]
 
-    logger.info("Processing frames...")
+    assert len(all_frame_data) == len(gt_poses), (
+        f"[{name}] Frame-completeness check FAILED: Stage 2 output has {len(all_frame_data)} "
+        f"frames, GT has {len(gt_poses)} frames")
+    logger.info(f"  Frame-completeness check PASSED: {len(all_frame_data)} frames match GT")
+
+    eval_list = []
+    total_gt_count = 0
+    all_frame_summaries = []
+    all_frames_poses = []
+    frame_to_idx_mapping = {}
+    triangulation_time_sec = 0.0
+
     for frame_data in all_frame_data:
         frame_idx = frame_data['frame_idx']
         frame_num = frame_data['frame_num']
         matched_clusters = frame_data['matched_clusters']
 
-        logger.info(f"\n--- Frame {frame_num} ({frame_idx}/{len(all_frame_data)}) ---")
-
-        # GT parsed first so it counts toward recall/AP even with zero predictions
         if frame_idx >= len(gt_poses):
-            logger.info(f"  Warning: frame_idx {frame_idx} out of GT range")
             continue
 
         gt_pose_frame = gt_poses[frame_idx]
@@ -139,70 +134,56 @@ def main():
             gt_masks_clean[gt_idx] = mask
 
         gt_valid_indices = sorted(gt_poses_clean.keys())
+        gt_id_offset = total_gt_count
         total_gt_count += len(gt_valid_indices)
 
-        # Triangulate
+        _t0 = time.perf_counter()
         frame_avg_poses, frame_confidences = fuse_poses(
             matched_clusters, triangulator, view_names_sorted,
-            proj_matrices=proj_matrices,
-            reproj_threshold=args.reproj_threshold,
+            proj_matrices=proj_matrices, K_dict=K_dict, dist_dict=dist_dict,
+            reproj_threshold=reproj_threshold,
             n_keypoints=N_KEYPOINTS, logger=logger,
         )
+        triangulation_time_sec += time.perf_counter() - _t0
 
         if not frame_avg_poses:
-            logger.info(f"  No valid poses for frame {frame_num}")
             continue
 
-        logger.info(f"  Triangulated {len(frame_avg_poses)} pose(s)")
-
-        if args.save_3d_poses:
+        if save_3d_poses:
             all_frames_poses.append(np.array(frame_avg_poses))
             frame_to_idx_mapping[frame_num] = len(all_frames_poses) - 1
 
-        n_pred = len(frame_avg_poses)
-        cost_matrix = np.full((n_pred, len(gt_valid_indices)), INF_COST)
-        for pi, fused_pose in enumerate(frame_avg_poses):
-            for col, gt_idx in enumerate(gt_valid_indices):
-                cost_matrix[pi, col] = compute_mpjpe(
-                    fused_pose, gt_poses_clean[gt_idx], gt_masks_clean[gt_idx]
-                )
-
-        # Optimal assignment (Hungarian algorithm)
-        assignments = _hungarian(cost_matrix)
-
-        # surplus (unassigned) predictions still count as FP in the AP pool
-        assigned_col_of = {p: c for p, c in assignments}
-        for pred_idx in range(n_pred):
-            conf = frame_confidences[pred_idx] if pred_idx < len(frame_confidences) else 0.0
-            if pred_idx in assigned_col_of:
-                col = assigned_col_of[pred_idx]
-                ap_mpjpe = cost_matrix[pred_idx, col]
-                ap_gt_idx = gt_valid_indices[col]
-            else:
-                ap_mpjpe = float('inf')
-                ap_gt_idx = None
-            all_predictions_for_ap.append((conf, ap_mpjpe, frame_idx, ap_gt_idx))
-
+        # Human-M3 protocol: each prediction finds its own nearest GT, no Hungarian
         frame_person_results = []
-        for pred_idx, col in assignments:
-            cost = cost_matrix[pred_idx, col]
-            gt_idx = gt_valid_indices[col]
-            if cost >= MATCH_THRESHOLD_MM:
-                logger.info(f"    Person {pred_idx}: no GT match (MPJPE={cost:.1f}mm)")
+        for pred_idx, fused_pose in enumerate(frame_avg_poses):
+            conf = frame_confidences[pred_idx] if pred_idx < len(frame_confidences) else 0.0
+
+            if not gt_valid_indices:
+                eval_list.append({
+                    'mpjpe': float('inf'), 'pa_mpjpe': float('inf'),
+                    'score': conf, 'gt_id': None, 'frame_idx': frame_idx,
+                })
                 continue
 
-            fused_pose = frame_avg_poses[pred_idx]
-            mpjpe = compute_mpjpe(fused_pose, gt_poses_clean[gt_idx], gt_masks_clean[gt_idx])
-            pa_mpjpe = compute_pa_mpjpe(fused_pose, gt_poses_clean[gt_idx], gt_masks_clean[gt_idx])
+            cand_mpjpes = [
+                compute_mpjpe(fused_pose, gt_poses_clean[gt_idx], gt_masks_clean[gt_idx])
+                for gt_idx in gt_valid_indices
+            ]
+            best_local = int(np.argmin(cand_mpjpes))
+            best_gt_idx = gt_valid_indices[best_local]
+            best_mpjpe = float(cand_mpjpes[best_local])
+            best_pa_mpjpe = float(compute_pa_mpjpe(
+                fused_pose, gt_poses_clean[best_gt_idx], gt_masks_clean[best_gt_idx]
+            ))
+            global_gt_id = gt_id_offset + best_local
 
-            logger.info(f"    Person {pred_idx} → GT {gt_idx}: "
-                        f"MPJPE={mpjpe:.2f}mm, PA-MPJPE={pa_mpjpe:.2f}mm")
-            total_matched_count += 1
-            all_mpjpe.append(mpjpe)
-            all_pa_mpjpe.append(pa_mpjpe)
+            eval_list.append({
+                'mpjpe': best_mpjpe, 'pa_mpjpe': best_pa_mpjpe,
+                'score': conf, 'gt_id': global_gt_id, 'frame_idx': frame_idx,
+            })
             frame_person_results.append({
-                'person_idx': int(pred_idx), 'gt_person_idx': int(gt_idx),
-                'mpjpe': float(mpjpe), 'pa_mpjpe': float(pa_mpjpe),
+                'person_idx': int(pred_idx), 'gt_person_idx': int(best_gt_idx),
+                'mpjpe': best_mpjpe, 'pa_mpjpe': best_pa_mpjpe, 'score': conf,
             })
 
         if frame_person_results:
@@ -212,59 +193,27 @@ def main():
                 'persons': frame_person_results,
             })
 
-    # Summary
-    logger.info(f"\n{'=' * 80}")
-    logger.info("Evaluation Results")
-    logger.info("=" * 80)
+    logger.info(f"  Triangulation time: {triangulation_time_sec:.1f}s total, "
+                f"{triangulation_time_sec / max(len(all_frame_data), 1) * 1000:.1f}ms/frame")
 
-    if all_mpjpe:
-        mean_mpjpe     = float(np.mean(all_mpjpe))
-        median_mpjpe   = float(np.median(all_mpjpe))
-        mean_pa_mpjpe  = float(np.mean(all_pa_mpjpe))
-        median_pa_mpjpe= float(np.median(all_pa_mpjpe))
-        recall = total_matched_count / total_gt_count if total_gt_count > 0 else 0.0
-        pa_arr = np.array(all_pa_mpjpe)
-        ap_thresholds = [75, 100, 125, 150]
+    stats = compute_stats(eval_list, total_gt_count)
+    log_stats(logger, name, stats)
 
-        recall_at_delta = {t: float((pa_arr < t).sum()) / total_gt_count
-                           if total_gt_count > 0 else 0.0 for t in ap_thresholds}
-        ap_values = {t: compute_ap_delta(all_predictions_for_ap, t, total_gt_count)
-                     for t in ap_thresholds}
-
-        logger.info(f"GT persons:   {total_gt_count}")
-        logger.info(f"Matched:      {total_matched_count}  (Recall: {recall*100:.2f}%)")
-        logger.info(f"MPJPE:        {mean_mpjpe:.2f}mm mean, {median_mpjpe:.2f}mm median")
-        logger.info(f"PA-MPJPE:     {mean_pa_mpjpe:.2f}mm mean, {median_pa_mpjpe:.2f}mm median")
-        for t in ap_thresholds:
-            logger.info(f"Recall@{t}mm: {recall_at_delta[t]*100:.2f}%   AP@{t}mm: {ap_values[t]*100:.2f}%")
-
-        results_json = {
+    dataset_dir = os.path.join(output_dir, name)
+    os.makedirs(dataset_dir, exist_ok=True)
+    with open(os.path.join(dataset_dir, 'evaluation_results_xrmocap.json'), 'w') as f:
+        json.dump({
             'summary': {
                 'total_frames': len(all_frame_data),
                 'evaluated_frames': len(all_frame_summaries),
-                'ransac_reproj_threshold': args.reproj_threshold,
-                'total_gt': total_gt_count,
-                'total_matched': total_matched_count,
-                'recall': recall,
-                'total_poses': len(all_mpjpe),
-                'mean_mpjpe': mean_mpjpe,
-                'median_mpjpe': median_mpjpe,
-                'mean_pa_mpjpe': mean_pa_mpjpe,
-                'median_pa_mpjpe': median_pa_mpjpe,
-                **{f'recall_at_{t}mm': recall_at_delta[t] for t in ap_thresholds},
-                **{f'ap{t}mm': ap_values[t] for t in ap_thresholds},
+                'reproj_threshold': reproj_threshold,
+                'triangulation_time_sec': triangulation_time_sec,
+                **stats,
             },
             'frame_summaries': all_frame_summaries,
-        }
-        out_json = os.path.join(args.output_dir, 'evaluation_results_xrmocap.json')
-        with open(out_json, 'w') as f:
-            json.dump(results_json, f, indent=2)
-        logger.info(f"\nResults saved to: {out_json}")
-    else:
-        logger.info("No valid evaluations performed.")
+        }, f, indent=2)
 
-    # Save 3D poses
-    if args.save_3d_poses and all_frames_poses:
+    if save_3d_poses and all_frames_poses:
         max_persons = max(p.shape[0] for p in all_frames_poses)
         n_frames = len(all_frames_poses)
         poses_padded = np.zeros((n_frames, max_persons, N_KEYPOINTS, 3), dtype=np.float32)
@@ -273,24 +222,94 @@ def main():
             n = fp.shape[0]
             poses_padded[fi, :n] = fp
             poses_mask[fi, :n] = 1
+        np.savez(os.path.join(dataset_dir, 'predicted_3d_poses_xrmocap.npz'),
+                 pose=poses_padded, mask=poses_mask,
+                 frame_mapping=frame_to_idx_mapping, convention=f'{N_KEYPOINTS}points')
 
-        out_npz = os.path.join(args.output_dir, 'predicted_3d_poses_xrmocap.npz')
-        np.savez(out_npz, pose=poses_padded, mask=poses_mask,
-                 frame_mapping=frame_to_idx_mapping, convention='13points')
-        logger.info(f"\nSaved 3D poses: {out_npz}  shape={poses_padded.shape}")
+        gt_nf, gt_np_, gt_nk, _ = gt_poses.shape
+        poses_gt_fmt = np.zeros((gt_nf, gt_np_, gt_nk, 3), dtype=np.float32)
+        for frame_num, pred_idx in frame_to_idx_mapping.items():
+            if pred_idx < gt_nf:
+                fp = all_frames_poses[pred_idx]
+                n = min(fp.shape[0], gt_np_)
+                poses_gt_fmt[pred_idx, :n] = fp[:n]
+        np.savez(os.path.join(dataset_dir, 'predicted_3d_poses_gt_format.npz'),
+                 pose=poses_gt_fmt, convention=f'{N_KEYPOINTS}points')
 
-        # GT-format output
-        if gt_poses is not None:
-            gt_nf, gt_np, gt_nk, _ = gt_poses.shape
-            poses_gt_fmt = np.zeros((gt_nf, gt_np, gt_nk, 3), dtype=np.float32)
-            for frame_num, pred_idx in frame_to_idx_mapping.items():
-                if pred_idx < gt_nf:
-                    fp = all_frames_poses[pred_idx]
-                    n = min(fp.shape[0], gt_np)
-                    poses_gt_fmt[pred_idx, :n] = fp[:n]
-            out_gt = os.path.join(args.output_dir, 'predicted_3d_poses_gt_format.npz')
-            np.savez(out_gt, pose=poses_gt_fmt, convention='13points')
-            logger.info(f"Saved GT-format poses: {out_gt}  shape={poses_gt_fmt.shape}")
+    logger.info(f"  Saved per-dataset outputs to: {dataset_dir}")
+    return eval_list, total_gt_count, triangulation_time_sec
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Stage 3: RANSAC triangulation and evaluation'
+    )
+    # required, no hard-coded defaults; pass multiple to combine datasets
+    parser.add_argument('--intermediate_input', type=str, required=True, nargs='+',
+                        help='One or more matched_clusters.pkl paths from Stage 2')
+    parser.add_argument('--gt_file', type=str, required=True, nargs='+',
+                        help='One keypoints3d_GT.npz per --intermediate_input, same order')
+    parser.add_argument('--dataset_name', type=str, nargs='+', default=None,
+                        help='One label per dataset (default: dataset0, dataset1, ...)')
+    parser.add_argument('--output_dir', type=str, required=True,
+                        help='Output directory for results')
+    parser.add_argument('--save_3d_poses', action='store_true', default=True,
+                        help='Save triangulated 3D poses to NPZ')
+    parser.add_argument('--reproj_threshold', type=float, default=20.0,
+                        help='RANSAC reprojection inlier threshold (pixels)')
+    args = parser.parse_args()
+
+    if len(args.intermediate_input) != len(args.gt_file):
+        parser.error('--intermediate_input and --gt_file must have the same count')
+    names = args.dataset_name or [f'dataset{i}' for i in range(len(args.intermediate_input))]
+    if len(names) != len(args.intermediate_input):
+        parser.error('--dataset_name must have the same count as --intermediate_input')
+
+    logger, log_file = setup_logger(args.output_dir, 'part2_triangulation')
+    logger.info(f"Log file: {log_file}")
+    logger.info("=" * 80)
+    logger.info("Stage 3: Triangulation and Evaluation")
+    logger.info("=" * 80)
+    logger.info(f"Output dir: {args.output_dir}")
+    logger.info(f"Datasets:   {', '.join(names)}")
+
+    import numpy.core._multiarray_umath as _mu
+    sys.modules['numpy._core._multiarray_umath'] = _mu
+    sys.modules['numpy._core'] = np.core
+
+    combined_eval_list = []
+    combined_total_gt = 0
+    per_dataset_stats = {}
+    per_dataset_timing = {}
+
+    for name, intermediate_input, gt_file in zip(names, args.intermediate_input, args.gt_file):
+        eval_list, total_gt, timing_sec = process_dataset(
+            name, intermediate_input, gt_file, args.reproj_threshold,
+            args.output_dir, args.save_3d_poses, logger,
+        )
+        per_dataset_stats[name] = compute_stats(eval_list, total_gt)
+        per_dataset_timing[name] = timing_sec
+
+        for item in eval_list:
+            if item['gt_id'] is not None:
+                item['gt_id'] += combined_total_gt
+        combined_eval_list.extend(eval_list)
+        combined_total_gt += total_gt
+
+    logger.info(f"\n{'=' * 80}\nCombined Results ({', '.join(names)})\n{'=' * 80}")
+    combined_stats = compute_stats(combined_eval_list, combined_total_gt)
+    log_stats(logger, 'combined', combined_stats)
+
+    combined_json = {
+        'datasets': names,
+        'per_dataset': per_dataset_stats,
+        'per_dataset_triangulation_time_sec': per_dataset_timing,
+        'combined': combined_stats,
+    }
+    out_json = os.path.join(args.output_dir, 'evaluation_results_combined.json')
+    with open(out_json, 'w') as f:
+        json.dump(combined_json, f, indent=2)
+    logger.info(f"\nCombined results saved to: {out_json}")
 
     logger.info(f"\n{'=' * 80}")
     logger.info("Stage 3 Complete!")

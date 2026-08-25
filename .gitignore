@@ -31,6 +31,9 @@ __pycache__/
 *.pth
 *.bin
 
+# MAEM's own experiment sweep outputs (run_*_experiment.sh)
+/output/
+
 # sam-3d-body: exclude data/output, keep source code
 sam-3d-body/output/
 sam-3d-body/checkpoints/

@@ -5,6 +5,7 @@ import os
 from itertools import combinations
 from typing import Dict, List, Optional
 
+import cv2
 import numpy as np
 
 
@@ -155,10 +156,12 @@ def _triangulate_point_ransac(pts2d_all: np.ndarray, P_all: List[np.ndarray],
 
 def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[str],
                                proj_matrices: Dict[str, np.ndarray],
+                               K_dict: Optional[Dict] = None,
+                               dist_dict: Optional[Dict] = None,
                                reproj_threshold: float = 20.0,
                                n_keypoints: int = 13,
                                logger=None) -> Optional[np.ndarray]:
-    """Per-keypoint RANSAC triangulation for one cluster; pred_keypoints_2d assumed already undistorted."""
+    """Per-keypoint RANSAC triangulation for one cluster; undistorts pred_keypoints_2d if K_dict/dist_dict given."""
     poses_dict = matched_cluster['poses']
     n_views = len(view_names_sorted)
 
@@ -179,9 +182,18 @@ def triangulate_cluster_ransac(matched_cluster: Dict, view_names_sorted: List[st
                     if not (np.all(kpts[ki, :2] == 0) or not np.all(np.isfinite(kpts[ki, :2])))]
         raw_pts = [kpts[ki, :2] for ki in valid_ki]
 
-        for idx, ki in enumerate(valid_ki):
-            pts2d_all[vi, ki] = raw_pts[idx]
-            valid_mask[vi, ki] = True
+        if raw_pts and K_dict is not None and dist_dict is not None:
+            K = K_dict[view_name]
+            dist = dist_dict[view_name]
+            pts_arr = np.array(raw_pts, dtype=np.float32).reshape(-1, 1, 2)
+            undist = cv2.undistortPoints(pts_arr, K, dist, P=K).reshape(-1, 2)
+            for idx, ki in enumerate(valid_ki):
+                pts2d_all[vi, ki] = undist[idx]
+                valid_mask[vi, ki] = True
+        else:
+            for idx, ki in enumerate(valid_ki):
+                pts2d_all[vi, ki] = raw_pts[idx]
+                valid_mask[vi, ki] = True
 
     if logger:
         valid_views = [v for v in view_names_sorted if v in poses_dict]
@@ -245,6 +257,8 @@ def triangulate_cluster_xrmocap(matched_cluster: Dict, triangulator,
 def fuse_poses(matched_clusters: List[Dict], triangulator,
                view_names_sorted: List[str],
                proj_matrices: Optional[Dict] = None,
+               K_dict: Optional[Dict] = None,
+               dist_dict: Optional[Dict] = None,
                reproj_threshold: float = 20.0,
                n_keypoints: int = 13,
                logger=None):
@@ -258,6 +272,7 @@ def fuse_poses(matched_clusters: List[Dict], triangulator,
         if proj_matrices is not None:
             pose_3d = triangulate_cluster_ransac(
                 cluster, view_names_sorted, proj_matrices,
+                K_dict=K_dict, dist_dict=dist_dict,
                 reproj_threshold=reproj_threshold,
                 n_keypoints=n_keypoints, logger=logger
             )
