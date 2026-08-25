@@ -145,10 +145,12 @@ Stage 1 does not write an NPZ for a frame with zero detections. Older versions o
 
 | `--keypoint_convention` | Joints | Used for |
 |---|---|---|
-| `sportcenter_13` (default) | head, L/R shoulder, L/R elbow, L/R wrist, L/R hip, L/R knee, L/R ankle | SportCenter, and legacy Human-M3 results computed against a 13-point GT |
+| `sportcenter_13` (default) | head\*, L/R shoulder, L/R elbow, L/R wrist, L/R hip, L/R knee, L/R ankle | SportCenter, and legacy Human-M3 results computed against a 13-point GT |
 | `humanm3_15` | the above **plus pelvis and neck**, in Human-M3's own joint order | matching Human-M3's official evaluation protocol (`lib/dataset/human_m3.py`'s `valid_joints_def`), for numbers meant to be compared against MMVP |
 
-SAM-3D-Body has no dedicated pelvis keypoint; `humanm3_15` derives it as the left-hip/right-hip midpoint, the same convention SAM-3D-Body's own source uses internally (`sam3d_body.py`: `pelvis_idx = [9, 10]`). `neck` is MHR keypoint 69. Using `humanm3_15` requires a matching 15-point `keypoints3d_GT.npz` — see `pose_calib/*.json` in the Human-M3 dataset for the raw 15-point annotations (already in Human-M3's own joint order; no reordering needed to build the GT file, only the homogeneous-coordinate/mask packing shown in "Ground truth file format" below).
+\*"head" is currently MHR's **nose** keypoint (MHR has no dedicated head-center joint) — Human-M3's own GT defines head as a different point (SMPL joint 15, not nose), so this joint is not yet a like-for-like comparison against Human-M3/MMVP numbers.
+
+SAM-3D-Body has no dedicated pelvis keypoint; `humanm3_15` derives it as the left-hip/right-hip midpoint, the same convention SAM-3D-Body's own source uses internally (`sam3d_body.py`: `pelvis_idx = [9, 10]`). `neck` is MHR keypoint 69. Using `humanm3_15` requires a matching 15-point `keypoints3d_GT.npz` — see `pose_calib/*.json` in the Human-M3 dataset for the raw 15-point annotations (already in Human-M3's own joint order). **No conversion script for this exists yet** — only 13-point GT files are on disk, so `humanm3_15` isn't runnable end to end today.
 
    
 ## Stage 3 — Triangulation and Evaluation
