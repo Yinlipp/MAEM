@@ -223,15 +223,6 @@ For more file format information, please refer to [xrmocap official instructions
 
 MAEM is retraining-free — there is no training step or learned weights anywhere in this pipeline, so `train/` is never used to fit a model. It's only used once, manually, to pick the pipeline's thresholds (`--bbox_score_threshold`, `--epi_threshold`, `--repr_threshold`, `--min_views_cluster`, `--reproj_threshold`): those values are confirmed by running on `train/`, then **fixed** and applied unchanged to `test/` for every number reported in the paper. Stage 1/2/3 themselves only ever run against `test/`:
 
-| Split | Frames | Used by MAEM? |
-|---|---|---|
-| `test/basketball1/split1` | 200 (1800–1999) | yes |
-| `test/basketball1/split2` | 200 (1800–1999, different clip, same camera rig) | yes |
-| `test/basketball2` | 500 (4500–4999) | yes |
-| `train/basketball1/split1`, `split2` | 1800 each | no |
-| `train/basketball2` | 4500 | no |
-
-Basketball1's two test splits are independent recordings from the same fixed 4-camera setup that happen to share a frame-number range — they are not two halves of one clip, so run Stage 2 separately per split (see the Basketball1 command above) and combine at Stage 3.
 
 ---
 
