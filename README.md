@@ -78,7 +78,7 @@ python epipolar_matching_clustering.py \
     --intermediate_output  /path/to/output/basketball1_$SPLIT/intermediate_matched_clusters.pkl \
     --view_name_pattern    "camera_{i}" \
     --num_views             4 \
-    --camera_param_pattern "fisheye_param_{i:02d}.json" \
+    --camera_param_pattern "camera_{i}.json" \
     --matching_mode        epi_gate \
     --bbox_score_threshold 0.7 \
     --epi_threshold         8.0 \
@@ -99,7 +99,7 @@ python epipolar_matching_clustering.py \
     --intermediate_output  /path/to/output/basketball2/intermediate_matched_clusters.pkl \
     --view_name_pattern    "camera_{i}" \
     --num_views             3 \
-    --camera_param_pattern "fisheye_param_{i:02d}.json" \
+    --camera_param_pattern "camera_{i}.json" \
     --matching_mode        epi_gate \
     --bbox_score_threshold 0.7 \
     --epi_threshold         8.0 \
@@ -211,7 +211,7 @@ For more file format information, please refer to [xrmocap official instructions
 
 ## Train/Test Split
 
-MAEM is retraining-free — there is no training step or learned weights anywhere in this pipeline, so `train/` is never used to fit a model. It's only used once, manually, to pick the pipeline's thresholds (`--bbox_score_threshold`, `--epi_threshold`, `--repr_threshold`, `--min_views_cluster`, `--reproj_threshold`): those values are confirmed by running on `train/`, then **fixed** and applied unchanged to `test/` for every number reported in the paper. Stage 1/2/3 themselves only ever run against `test/`:
+MAEM is retraining-free — there is no training step or learned weights anywhere in this pipeline, so `train/` is never used to fit a model. It's only used once, manually, to pick the pipeline's thresholds (`--bbox_score_threshold`, `--epi_threshold`, `--repr_threshold`, `--min_views_cluster`, `--reproj_threshold`): those values are confirmed by running on `train/`, then **fixed** and applied unchanged to `test/` for every number reported in the paper. The main evaluation is performed on the test split, whereas threshold sensitivity and operating-point selection are performed only on the training split.
 
 ---
 
