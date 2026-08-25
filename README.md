@@ -44,8 +44,6 @@ Output:
 ```
 **Note:** `pred_keypoints_2d_verts` (2D projections of all 18,439 mesh vertices) is added by modifying SAM-3D-Body source and is required by the epipolar matching stage.
 
-**Note:** SAM 3D Body itself does not undistort — the NPZ output (`pred_keypoints_2d`/`pred_keypoints_2d_verts`/`bbox`) is in the original, distorted pixel space of the input images. Stage 2 and Stage 3 undistort these points themselves (`cv2.undistortPoints`) using each view's real camera `k1/k2/p1/p2/k3`, loaded from `--camera_param_dir`, before matching/triangulating. Passing the correct camera parameters is required for geometrically correct results on fisheye/distorted cameras (e.g. SportCenter).
-
 
 ## Stage 2 &mdash; Cross-view Matching and Clustering
 cd ..
@@ -87,7 +85,8 @@ python epipolar_matching_clustering.py \
     --repr_threshold        30.0 \
     --min_views_cluster     2 \
     --start_frame            1800 \
-    --num_frames             200
+    --num_frames             200 \
+    --keypoint_convention   humanm3_15
 done
 ```
 
@@ -107,7 +106,8 @@ python epipolar_matching_clustering.py \
     --repr_threshold        30.0 \
     --min_views_cluster     2 \
     --start_frame            4500 \
-    --num_frames             500
+    --num_frames             500 \
+    --keypoint_convention   humanm3_15
 ```
 **Key parameters:**
 
@@ -135,9 +135,6 @@ python epipolar_matching_clustering.py \
 | `intermediate_matched_clusters.pkl` | Per-frame person clusters, each with 2D keypoints per view, used as input to Stage 3 |
 | `matching_results.json` | Human-readable summary: per-frame match info, scores, cluster sizes |
 
-### Frame completeness
-
-Stage 1 does not write an NPZ for a frame with zero detections. Older versions of this pipeline discovered frame numbers by scanning which NPZ files exist on disk, which silently dropped those frames — their GT persons would never reach Stage 3's recall/AP denominator, inflating the reported numbers. Stage 2 now always processes the explicit `[start_frame, start_frame + num_frames)` range and writes an entry (possibly with zero matched clusters) for every one of them; it asserts `len(all_frame_data) == num_frames` before saving. Stage 3 asserts its input frame count equals the GT file's frame count before evaluating. Both checks fail loudly (`AssertionError`) rather than silently producing an inflated number.
 
 ### Keypoint conventions
 
@@ -145,12 +142,9 @@ Stage 1 does not write an NPZ for a frame with zero detections. Older versions o
 
 | `--keypoint_convention` | Joints | Used for |
 |---|---|---|
-| `sportcenter_13` (default) | head\*, L/R shoulder, L/R elbow, L/R wrist, L/R hip, L/R knee, L/R ankle | SportCenter, and legacy Human-M3 results computed against a 13-point GT |
+| `sportcenter_13` (default) | head, L/R shoulder, L/R elbow, L/R wrist, L/R hip, L/R knee, L/R ankle | SportCenter, and legacy Human-M3 results computed against a 13-point GT |
 | `humanm3_15` | the above **plus pelvis and neck**, in Human-M3's own joint order | matching Human-M3's official evaluation protocol (`lib/dataset/human_m3.py`'s `valid_joints_def`), for numbers meant to be compared against MMVP |
 
-\*"head" is currently MHR's **nose** keypoint (MHR has no dedicated head-center joint) — Human-M3's own GT defines head as a different point (SMPL joint 15, not nose), so this joint is not yet a like-for-like comparison against Human-M3/MMVP numbers.
-
-SAM-3D-Body has no dedicated pelvis keypoint; `humanm3_15` derives it as the left-hip/right-hip midpoint, the same convention SAM-3D-Body's own source uses internally (`sam3d_body.py`: `pelvis_idx = [9, 10]`). `neck` is MHR keypoint 69. Using `humanm3_15` requires a matching 15-point `keypoints3d_GT.npz` — see `pose_calib/*.json` in the Human-M3 dataset for the raw 15-point annotations (already in Human-M3's own joint order). **No conversion script for this exists yet** — only 13-point GT files are on disk, so `humanm3_15` isn't runnable end to end today.
 
    
 ## Stage 3 — Triangulation and Evaluation
@@ -212,12 +206,6 @@ To get a Basketball1-only row (split1+split2 combined) and a Basketball2-only ro
 Persons with `mask.sum() == 0` are placeholder slots and are skipped during evaluation. Only joints where `mask == 1` contribute to MPJPE.
 For more file format information, please refer to [xrmocap official instructions](https://github.com/openxrlab/xrmocap/blob/main/docs/en/data_structure/keypoints.md)
 
-**Metrics report** (per dataset and combined):
-
-- **MPJPE@500mm** — mean/median Per Joint Position Error (mm) of the confidence-ranked, de-duplicated true-positive set (Human-M3's own `_eval_list_to_mpjpe` at its default 500mm gate)
-- **PA-MPJPE** — Procrustes-Aligned MPJPE (mm) over that same TP set; not part of Human-M3's own protocol, reported as a bonus
-- **Recall@500mm** — fraction of GT persons matched within 500mm, no confidence de-duplication (Human-M3's `_eval_list_to_recall`)
-- **AP@25/50/75/100/125/150mm** — confidence-ranked, all-point-interpolated average precision at each of Human-M3's six thresholds (`_eval_list_to_ap`)
 
 ---
 
@@ -225,10 +213,9 @@ For more file format information, please refer to [xrmocap official instructions
 
 MAEM is retraining-free — there is no training step or learned weights anywhere in this pipeline, so `train/` is never used to fit a model. It's only used once, manually, to pick the pipeline's thresholds (`--bbox_score_threshold`, `--epi_threshold`, `--repr_threshold`, `--min_views_cluster`, `--reproj_threshold`): those values are confirmed by running on `train/`, then **fixed** and applied unchanged to `test/` for every number reported in the paper. Stage 1/2/3 themselves only ever run against `test/`:
 
-
 ---
 
-## Reproducing Figure 4 — Threshold Sensitivity
+##  Threshold Sensitivity
 
 `run_threshold_sensitivity_experiment.sh` sweeps each of the 5 pipeline thresholds one at a time around a fixed baseline (detection confidence, bbox reprojection, mesh epipolar distance, Kmin, RANSAC inlier threshold), running Stage 2 + Stage 3 for every value. Edit the path variables at the top of the script for your data layout, then:
 ```
@@ -236,7 +223,7 @@ bash run_threshold_sensitivity_experiment.sh
 ```
 Each run's `evaluation_results_xrmocap.json` (recall/MPJPE/AP) lands under `output/sensitivity_experiment/<parameter>/<value>/`; plot whichever metric Figure 4 uses against the swept value. The script skips any run whose output already exists, so it can be interrupted and resumed.
 
-## Reproducing Table 7 — Vertex Subsampling
+## Vertex Subsampling
 
 `run_vertex_downsample_experiment.sh` sweeps `--vertex_sample_rate` (1, 2, 4, 8, 16, 32, 64— i.e. 1×, 1/2×, 1/4×, ... of the ~18,439 mesh vertices used for the Stage-2 epipolar gate) holding everything else at baseline:
 ```
@@ -246,8 +233,9 @@ Results land under `output/vertex_downsample_experiment/rate_<N>/`; each `driver
 
 ## Runtime Measurement
 
-No separate profiling tool needed — both stages log their own timing directly:
-- **Stage 2**: `Gate timing (<mode>): <n> frames, total=<ms>, avg=<ms>/frame` in the log.
+No separate profiling tool needed — all three stages log their own timing directly, each averaged over the full input sequence (not just frames with a valid prediction):
+- **Stage 1**: `Mesh recovery timing: <n> images, total=<s>s, avg=<ms>/image` in the log.
+- **Stage 2**: three separate lines — `Bbox reprojection filtering timing`, `Dense epipolar matching timing`, `Clustering timing` (each `<n> frames, total=<ms>, avg=<ms>/frame`), plus a `Gate timing (<mode>, repr+epi combined)` line summing the first two.
 - **Stage 3**: `Triangulation time: <s>s total, <ms>/frame` per dataset, and the same number under `per_dataset_triangulation_time_sec` in `evaluation_results_combined.json`.
 
 For full wall-clock time (including model I/O), just `time` the whole command — the two sweep scripts above already do this per run via the shell `time` builtin.

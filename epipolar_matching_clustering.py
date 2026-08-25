@@ -95,8 +95,9 @@ def main():
     logger.info(f"Processing {len(frame_numbers)} frames...\n")
 
     all_frame_data = []
-    total_gate_time = 0.0
-    frames_with_matching = 0
+    total_repr_gate_time = 0.0
+    total_epi_gate_time = 0.0
+    total_clustering_time = 0.0
 
     for frame_idx, frame_num in enumerate(frame_numbers):
         logger.info(f"--- Frame {frame_num} ({frame_idx + 1}/{len(frame_numbers)}) ---")
@@ -121,7 +122,7 @@ def main():
             matched_clusters = []
         else:
             logger.info("  Performing cross-view matching...")
-            matched_clusters, gate_time = match_poses_across_views(
+            matched_clusters, repr_gate_time, epi_gate_time, clustering_time = match_poses_across_views(
                 poses_world_dict,
                 min_views=args.min_views_cluster,
                 max_error_threshold=args.max_pa_mpjpe_threshold,
@@ -132,9 +133,12 @@ def main():
                 repr_threshold=args.repr_threshold,
                 logger=logger,
             )
-            total_gate_time += gate_time
-            frames_with_matching += 1
-            logger.info(f"  Gate time: {gate_time * 1000:.2f}ms")
+            total_repr_gate_time += repr_gate_time
+            total_epi_gate_time += epi_gate_time
+            total_clustering_time += clustering_time
+            logger.info(f"  Gate time: repr={repr_gate_time * 1000:.2f}ms, "
+                        f"epi={epi_gate_time * 1000:.2f}ms, "
+                        f"clustering={clustering_time * 1000:.2f}ms")
             if not matched_clusters:
                 logger.info("  No matched clusters found")
 
@@ -153,14 +157,24 @@ def main():
                 view_names=view_names, logger=logger,
             )
 
-    # Timing summary
+    # Timing summary — averaged over the full input sequence (len(frame_numbers)), not just
+    # frames that had a valid prediction, so this matches a full-sequence-average Table 8 number.
     logger.info(f"\n{'=' * 80}")
-    if frames_with_matching > 0:
-        avg_ms = total_gate_time * 1000.0 / frames_with_matching
-        logger.info(f"Gate timing ({args.matching_mode}): "
-                    f"{frames_with_matching} frames, "
-                    f"total={total_gate_time * 1000:.1f}ms, "
-                    f"avg={avg_ms:.2f}ms/frame")
+    n_total_frames = len(frame_numbers)
+    total_gate_time = total_repr_gate_time + total_epi_gate_time
+    logger.info(f"Bbox reprojection filtering timing: {n_total_frames} frames, "
+                f"total={total_repr_gate_time * 1000:.1f}ms, "
+                f"avg={total_repr_gate_time * 1000.0 / n_total_frames:.2f}ms/frame")
+    logger.info(f"Dense epipolar matching timing: {n_total_frames} frames, "
+                f"total={total_epi_gate_time * 1000:.1f}ms, "
+                f"avg={total_epi_gate_time * 1000.0 / n_total_frames:.2f}ms/frame")
+    logger.info(f"Clustering timing: {n_total_frames} frames, "
+                f"total={total_clustering_time * 1000:.1f}ms, "
+                f"avg={total_clustering_time * 1000.0 / n_total_frames:.2f}ms/frame")
+    logger.info(f"Gate timing ({args.matching_mode}, repr+epi combined): "
+                f"{n_total_frames} frames, "
+                f"total={total_gate_time * 1000:.1f}ms, "
+                f"avg={total_gate_time * 1000.0 / n_total_frames:.2f}ms/frame")
 
     # Save matched clusters
     os.makedirs(os.path.dirname(args.intermediate_output), exist_ok=True)

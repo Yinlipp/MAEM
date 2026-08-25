@@ -1,5 +1,6 @@
 """Union-Find clustering, conflict resolution, and cluster validation."""
 
+import time
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -191,10 +192,12 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
                              camera_params_dict: Optional[Dict] = None,
                              epi_threshold: float = 8.0,
                              repr_threshold: float = 30.0,
-                             logger=None) -> Tuple[List[Dict], float]:
+                             logger=None) -> Tuple[List[Dict], float, float, float]:
     """Hungarian matching + Union-Find clustering across views.
 
     matching_mode: pa_mpjpe | sparse | epi_gate (repr+epipolar) | repr_gate | epi_gate_only
+
+    Returns (valid_clusters, repr_gate_time_sec, epi_gate_time_sec, clustering_time_sec).
     """
     from .pose_matching import _filter_poses_by_quality, _compute_pairwise_matches
 
@@ -210,9 +213,9 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
     if len(view_names) < 2:
         if logger:
             logger.info(f"    Only {len(view_names)} view(s) available, skipping")
-        return [], 0.0
+        return [], 0.0, 0.0, 0.0
 
-    pairwise_matches, gate_time_sec = _compute_pairwise_matches(
+    pairwise_matches, repr_gate_time_sec, epi_gate_time_sec = _compute_pairwise_matches(
         poses_world_dict_all_people, view_names, matching_mode,
         max_error_threshold, camera_params_dict,
         epi_threshold=epi_threshold,
@@ -222,13 +225,15 @@ def match_poses_across_views(poses_world_dict_all_people: Dict,
     if not pairwise_matches:
         if logger:
             logger.info(f"    No pairwise matches found")
-        return [], gate_time_sec
+        return [], repr_gate_time_sec, epi_gate_time_sec, 0.0
 
+    _t0 = time.perf_counter()
     cluster_to_persons, _ = _build_person_clusters(pairwise_matches)
 
     valid_clusters = _filter_and_build_valid_clusters(
         cluster_to_persons, poses_world_dict_all_people, pairwise_matches, min_views, logger,
         camera_params_dict=camera_params_dict, epi_threshold=epi_threshold
     )
+    clustering_time_sec = time.perf_counter() - _t0
 
-    return valid_clusters, gate_time_sec
+    return valid_clusters, repr_gate_time_sec, epi_gate_time_sec, clustering_time_sec

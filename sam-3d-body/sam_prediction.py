@@ -2,8 +2,9 @@ import cv2
 import numpy as np
 import os
 import logging
+import time
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from tqdm import tqdm
 from notebook.utils import setup_sam_3d_body
 from tools.vis_utils import visualize_sample_together
@@ -22,24 +23,26 @@ def save_outputs(outputs: Any, output_path: str) -> None:
         logger.error(f"Failed to save outputs to {output_path}: {e}")
 
 def process_image(img_path: str, img_output_path: str, npz_output_path: str,
-                  estimator, save_visualization: bool = True) -> bool:
-    """Process one image and save results."""
+                  estimator, save_visualization: bool = True) -> Tuple[bool, float]:
+    """Process one image and save results. Returns (success, mesh_recovery_time_sec)."""
     try:
         img_bgr = cv2.imread(img_path)
         if img_bgr is None:
             logger.error(f"Failed to load image: {img_path}")
-            return False
+            return False, 0.0
 
         logger.info(f"Processing {img_path}")
 
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        _t0 = time.perf_counter()
         outputs = estimator.process_one_image(img_rgb)
+        mesh_recovery_time = time.perf_counter() - _t0
 
         if len(outputs) == 0:
             logger.warning(f"No person detected in {img_path}")
             if save_visualization:
                 cv2.imwrite(img_output_path, img_bgr)
-            return False
+            return False, mesh_recovery_time
 
         if save_visualization:
             rend_img = visualize_sample_together(img_bgr, outputs, estimator.faces)
@@ -47,11 +50,11 @@ def process_image(img_path: str, img_output_path: str, npz_output_path: str,
 
         save_outputs(outputs, npz_output_path)
 
-        return True
+        return True, mesh_recovery_time
 
     except Exception as e:
         logger.error(f"Error processing {img_path}: {e}")
-        return False
+        return False, 0.0
 
 def get_frame_number(filename: str) -> str:
     """Extract frame number from filename."""
@@ -102,6 +105,8 @@ def main():
 
     total_processed = 0
     total_failed = 0
+    total_mesh_recovery_time = 0.0
+    total_mesh_recovery_count = 0
 
     for folder_name in tqdm(folders, desc="Processing folders"):
         img_folder_path = os.path.join(imgs_root_folder, folder_name)
@@ -121,14 +126,22 @@ def main():
             frame_num = get_frame_number(img_name)
             npz_output_path = os.path.join(npz_output_folder, f'{frame_num}.npz')
 
-            success = process_image(img_path, img_output_path, npz_output_path, estimator)
+            success, mesh_recovery_time = process_image(
+                img_path, img_output_path, npz_output_path, estimator)
 
             if success:
                 total_processed += 1
             else:
                 total_failed += 1
+            if mesh_recovery_time > 0.0:
+                total_mesh_recovery_time += mesh_recovery_time
+                total_mesh_recovery_count += 1
 
     logger.info(f"Processing complete! Processed: {total_processed}, Failed: {total_failed}")
+    if total_mesh_recovery_count > 0:
+        avg_ms = total_mesh_recovery_time * 1000.0 / total_mesh_recovery_count
+        logger.info(f"Mesh recovery timing: {total_mesh_recovery_count} images, "
+                    f"total={total_mesh_recovery_time:.1f}s, avg={avg_ms:.2f}ms/image")
 
 if __name__ == "__main__":
     main()

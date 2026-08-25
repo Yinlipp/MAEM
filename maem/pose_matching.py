@@ -56,10 +56,12 @@ def _compute_hybrid_cost(kp1, kp2, verts_2d_1, verts_2d_2, F,
 def _compute_pairwise_matches(poses_world_dict, view_names, matching_mode,
                               max_error_threshold, camera_params_dict,
                               epi_threshold=10.0, repr_threshold=30.0, logger=None):
-    """Pairwise Hungarian matches per view pair; returns (matches_dict, gate_time_sec)."""
+    """Pairwise Hungarian matches per view pair; returns
+    (matches_dict, repr_gate_time_sec, epi_gate_time_sec)."""
     pairwise_matches = {}
     num_views = len(view_names)
-    gate_time_sec = 0.0
+    repr_gate_time_sec = 0.0
+    epi_gate_time_sec = 0.0
     INVALID_COST = 1e6
 
     if logger:
@@ -123,38 +125,39 @@ def _compute_pairwise_matches(poses_world_dict, view_names, matching_mode,
                         if (K2 is not None and verts_2d_2_raw is not None) else verts_2d_2_raw
 
                     if matching_mode in ('epi_gate', 'repr_gate', 'epi_gate_only'):
-                        _t0 = time.perf_counter()
-
                         if matching_mode in ('epi_gate', 'repr_gate'):
+                            _t0 = time.perf_counter()
                             bbox2 = poses2[p2_idx].get('bbox')
                             if bc1 is None or bbox2 is None or P1 is None:
                                 repr_gate_rejected += 1
-                                gate_time_sec += time.perf_counter() - _t0
+                                repr_gate_time_sec += time.perf_counter() - _t0
                                 continue
                             cx2 = (bbox2[0] + bbox2[2]) / 2.0
                             cy2 = (bbox2[1] + bbox2[3]) / 2.0
                             bc2 = undistort_points(np.array([[cx2, cy2]]), K2, dist2) \
                                 if K2 is not None else np.array([[cx2, cy2]])
                             pt_3d = triangulate_point_dlt(P1, P2, bc1[0], bc2[0])
-                            if pt_3d is None or max(
+                            repr_gate_failed = pt_3d is None or max(
                                 compute_reprojection_error(P1, pt_3d, bc1[0]),
                                 compute_reprojection_error(P2, pt_3d, bc2[0])
-                            ) >= repr_threshold:
+                            ) >= repr_threshold
+                            repr_gate_time_sec += time.perf_counter() - _t0
+                            if repr_gate_failed:
                                 repr_gate_rejected += 1
-                                gate_time_sec += time.perf_counter() - _t0
                                 continue
 
                         if matching_mode in ('epi_gate', 'epi_gate_only'):
+                            _t0 = time.perf_counter()
                             mesh_2_raw = poses2[p2_idx].get('pred_keypoints_2d_verts')
                             mesh_2 = undistort_points(mesh_2_raw, K2, dist2) \
                                 if (K2 is not None and mesh_2_raw is not None) else mesh_2_raw
                             epi_cost = compute_epipolar_cost(mesh_1, mesh_2, F, epi_threshold, logger)
-                            if F is None or epi_cost >= 1.0:
+                            epi_gate_failed = F is None or epi_cost >= 1.0
+                            epi_gate_time_sec += time.perf_counter() - _t0
+                            if epi_gate_failed:
                                 epi_gate_rejected += 1
-                                gate_time_sec += time.perf_counter() - _t0
                                 continue
 
-                        gate_time_sec += time.perf_counter() - _t0
                         cost_matrix[p1_idx, p2_idx] = compute_pa_mpjpe(kp1, kp2)
                     else:
                         cost_matrix[p1_idx, p2_idx] = _compute_hybrid_cost(
@@ -193,4 +196,4 @@ def _compute_pairwise_matches(poses_world_dict, view_names, matching_mode,
             elif logger:
                 logger.info(f"    {view1} <-> {view2}: 0 matches")
 
-    return pairwise_matches, gate_time_sec
+    return pairwise_matches, repr_gate_time_sec, epi_gate_time_sec

@@ -24,7 +24,7 @@ SCENE_DIR="/path/to/humanm3/train/basketball1/split1/images"
 GT_FILE="/path/to/humanm3/train/basketball1/split1/keypoints3d_GT.npz"
 VIEW_NAME_PATTERN="camera_{i}"
 NUM_VIEWS=4
-CAMERA_PARAM_PATTERN="camera_{i}.json"
+CAMERA_PARAM_PATTERN="fisheye_param_{i:02d}.json"
 START_FRAME=0
 NUM_FRAMES=1800
 
@@ -65,6 +65,7 @@ run_stage2 () {
             --epi_threshold "$EPI" \
             --min_views_cluster "$KMIN" \
             --matching_mode epi_gate \
+            --keypoint_convention humanm3_15 \
             ; } > "$DIR/driver_stage2.log" 2>&1
         if [ $? -ne 0 ]; then
             echo "  [FAIL] Stage 2 failed: $DIR (see $DIR/driver_stage2.log)"

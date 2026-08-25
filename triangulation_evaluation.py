@@ -107,6 +107,7 @@ def process_dataset(name, intermediate_input, gt_file, reproj_threshold,
     all_frame_summaries = []
     all_frames_poses = []
     frame_to_idx_mapping = {}
+    frame_idx_by_pred_idx = []
     triangulation_time_sec = 0.0
 
     for frame_data in all_frame_data:
@@ -152,6 +153,7 @@ def process_dataset(name, intermediate_input, gt_file, reproj_threshold,
         if save_3d_poses:
             all_frames_poses.append(np.array(frame_avg_poses))
             frame_to_idx_mapping[frame_num] = len(all_frames_poses) - 1
+            frame_idx_by_pred_idx.append(frame_idx)
 
         # Human-M3 protocol: each prediction finds its own nearest GT, no Hungarian
         frame_person_results = []
@@ -226,13 +228,16 @@ def process_dataset(name, intermediate_input, gt_file, reproj_threshold,
                  pose=poses_padded, mask=poses_mask,
                  frame_mapping=frame_to_idx_mapping, convention=f'{N_KEYPOINTS}points')
 
+        # Indexed by frame_idx (same convention as gt_poses), not pred_idx — pred_idx is a
+        # position in the compacted all_frames_poses list (skips frames with zero triangulated
+        # poses), so using it here would misalign every frame after the first skip.
         gt_nf, gt_np_, gt_nk, _ = gt_poses.shape
         poses_gt_fmt = np.zeros((gt_nf, gt_np_, gt_nk, 3), dtype=np.float32)
-        for frame_num, pred_idx in frame_to_idx_mapping.items():
-            if pred_idx < gt_nf:
-                fp = all_frames_poses[pred_idx]
+        for pred_idx, fp in enumerate(all_frames_poses):
+            fidx = frame_idx_by_pred_idx[pred_idx]
+            if fidx < gt_nf:
                 n = min(fp.shape[0], gt_np_)
-                poses_gt_fmt[pred_idx, :n] = fp[:n]
+                poses_gt_fmt[fidx, :n] = fp[:n]
         np.savez(os.path.join(dataset_dir, 'predicted_3d_poses_gt_format.npz'),
                  pose=poses_gt_fmt, convention=f'{N_KEYPOINTS}points')
 
