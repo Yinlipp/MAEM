@@ -1,23 +1,10 @@
 #!/bin/bash
-# One-at-a-time sweep of 5 pipeline thresholds around a baseline, evaluated end to end.
-# Each (parameter, value) run is independent, so Stage 2 runs (then Stage 3 runs) in parallel.
-#
-# Runs on the TRAIN split (basketball1/split1's train/ frames, never test/): thresholds are
-# picked here, then fixed and applied unchanged to test/ for every number reported in the
-# paper (see README's Train/Test Split section) — this script must never touch test/.
-#
-# Swept parameters:
-#   1. detection confidence   -> --bbox_score_threshold   (Stage 2, quality filter)
-#   2. bbox reprojection      -> --repr_threshold          (Stage 2, Stage-1 gate)
-#   3. mesh epipolar distance -> --epi_threshold           (Stage 2, Stage-2 gate)
-#   4. Kmin                   -> --min_views_cluster       (Stage 2, cluster validity)
-#   5. RANSAC inlier thresh   -> --reproj_threshold        (Stage 3, triangulation only)
+# Sweep 5 pipeline thresholds around a baseline (train split).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXP_DIR="$SCRIPT_DIR/output/sensitivity_experiment"
 
-# ==== Edit these for your layout ====
 OUTPUT_DIR="/path/to/stage1_output/basketball1/split1_train"
 CAMERA_PARAM_DIR="/path/to/humanm3/train/basketball1/split1/camera_calibration"
 SCENE_DIR="/path/to/humanm3/train/basketball1/split1/images"
@@ -28,9 +15,8 @@ CAMERA_PARAM_PATTERN="fisheye_param_{i:02d}.json"
 START_FRAME=0
 NUM_FRAMES=1800
 
-SAM3D_CONDA_ENV="sam_3d_body"   # conda env name from SAM 3D Body's INSTALL.md (README Stage 1)
-XRMOCAP_CONDA_ENV="xrmocap"     # conda env name from xrMoCap's install docs (README Stage 3)
-# =====================================
+SAM3D_CONDA_ENV="sam_3d_body"
+XRMOCAP_CONDA_ENV="xrmocap"
 
 BASE_BBOX=0.7
 BASE_REPR=30.0

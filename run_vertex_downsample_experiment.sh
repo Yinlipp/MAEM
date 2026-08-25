@@ -1,13 +1,10 @@
 #!/bin/bash
-# Sweep --vertex_sample_rate (dense-mesh epipolar gate, Stage 2) to check how far the
-# mesh can be downsampled before matching quality drops, holding all else at baseline.
-# Each rate is independent, so Stage 2 runs (then Stage 3 runs) in parallel.
+# Sweep --vertex_sample_rate around a baseline.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXP_DIR="$SCRIPT_DIR/output/vertex_downsample_experiment"
 
-# ==== Edit these for your layout ====
 OUTPUT_DIR="/path/to/stage1_output/basketball1/split1"
 CAMERA_PARAM_DIR="/path/to/humanm3/test/basketball1/split1/camera_calibration"
 SCENE_DIR="/path/to/humanm3/test/basketball1/split1/images"
@@ -18,9 +15,8 @@ CAMERA_PARAM_PATTERN="fisheye_param_{i:02d}.json"
 START_FRAME=1800
 NUM_FRAMES=200
 
-SAM3D_CONDA_ENV="sam_3d_body"   # conda env name from SAM 3D Body's INSTALL.md (README Stage 1)
-XRMOCAP_CONDA_ENV="xrmocap"     # conda env name from xrMoCap's install docs (README Stage 3)
-# =====================================
+SAM3D_CONDA_ENV="sam_3d_body"
+XRMOCAP_CONDA_ENV="xrmocap"
 
 BBOX=0.7
 REPR=30.0
